@@ -1,0 +1,23 @@
+[package]
+name = "etherealdb"
+version = "0.1.0"
+edition = "2024"
+description = "A database that isn't there: speaks real wire protocols, returns plausible nonsense."
+license = "MIT"
+
+[dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "net", "io-util", "macros", "signal"] }
+bytes = "1"
+rand = "0.9"
+rand_chacha = "0.9"
+clap = { version = "4", features = ["derive"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+uuid = { version = "1", features = ["v4"] }
+
+[dev-dependencies]
+tokio-postgres = "0.7"
+
+[profile.release]
+lto = true
+strip = true
