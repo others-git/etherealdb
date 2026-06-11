@@ -10,12 +10,16 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  # Survive flaky crates.io downloads (the kind that sank the first release run).
+  CARGO_NET_RETRY: "10"
+  CARGO_NET_GIT_FETCH_WITH_CLI: "true"
 
 jobs:
   binary:
     name: build binary (${{ matrix.target }})
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false # one flaky target shouldn't cancel the others
       matrix:
         target: [x86_64-unknown-linux-musl, aarch64-unknown-linux-musl]
     steps:
@@ -39,8 +43,17 @@ jobs:
         with:
           key: ${{ matrix.target }}
 
+      - name: Fetch dependencies (with retries)
+        run: |
+          for i in 1 2 3 4 5; do
+            cargo fetch --target ${{ matrix.target }} && exit 0
+            echo "::warning::cargo fetch attempt $i failed; retrying in 15s"
+            sleep 15
+          done
+          echo "::error::cargo fetch failed after 5 attempts"; exit 1
+
       - name: Build
-        run: cargo build --release --bin etherealdb --target ${{ matrix.target }}
+        run: cargo build --release --offline --bin etherealdb --target ${{ matrix.target }}
 
       - name: Package
         run: |
