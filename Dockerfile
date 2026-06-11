@@ -29,7 +29,7 @@ RUN adduser -D -u 10001 ethereal
 COPY --from=builder /app/target/release/etherealdb /usr/local/bin/etherealdb
 
 USER ethereal
-EXPOSE 5432 3306
+EXPOSE 5432 3306 6379
 ENTRYPOINT ["etherealdb"]
-# Listen on all interfaces so the container is reachable; speak both protocols.
-CMD ["--pg", "0.0.0.0:5432", "--mysql", "0.0.0.0:3306"]
+# Listen on all interfaces so the container is reachable; speak every protocol.
+CMD ["--pg", "0.0.0.0:5432", "--mysql", "0.0.0.0:3306", "--redis", "0.0.0.0:6379"]

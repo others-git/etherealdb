@@ -46,6 +46,7 @@ standing up real data — and entertainment.
 etherealdb                          # postgres protocol on 127.0.0.1:5432
 etherealdb --pg 0.0.0.0:5433        # different bind address
 etherealdb --mysql 127.0.0.1:3306   # also speak MySQL (off by default)
+etherealdb --redis 127.0.0.1:6379    # also speak Redis/RESP (off by default)
 etherealdb --seed 42                # deterministic: same query, same garbage
 etherealdb --rows 100:500           # row-count band when there's no LIMIT
 etherealdb --theme ecommerce        # domain-flavored values (see below)
@@ -54,8 +55,8 @@ etherealdb --crush                  # crush mode (see below)
 etherealdb infer email user_id ...  # ask the inference engine directly
 ```
 
-Run both protocols at once and connect with either `psql` or `mysql` — same
-fake data, same inference, same crush mode behind both.
+Run all protocols at once and connect with `psql`, `mysql`, or `redis-cli` —
+same inference, themes, and crush mode behind every one.
 
 Any username works. Any database name works. Trust auth, in the most
 literal sense.
@@ -65,6 +66,11 @@ literal sense.
 - **MySQL** protocol (`--mysql`): handshake + trust auth, `COM_QUERY` text
   result sets, so the `mysql` CLI and drivers connect. Crush mode and catalog
   stubs work here too — the whole engine is shared with Postgres.
+- **Redis** protocol (`--redis`): RESP2, so `redis-cli` and drivers connect.
+  Here the value type is inferred from the *key* — `GET user:42:email` returns
+  an email, `GET cart:9:total` returns money. `GET`/`SET`/`MGET`/`HGETALL`/
+  `KEYS`/`SCAN`/`INCR`/`TTL`/`TYPE`/`EXISTS` and more are answered; `KEYS *` is
+  the crush trigger (the Redis analogue of `SELECT *`).
 - Postgres **simple** query protocol: `psql`, and any driver's `simple_query`
   path.
 - Postgres **extended** query protocol: Parse/Bind/Describe/Execute, so drivers

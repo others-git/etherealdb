@@ -24,6 +24,10 @@ struct Cli {
     #[arg(long)]
     mysql: Option<String>,
 
+    /// Also listen for the Redis (RESP) protocol on this address (off by default).
+    #[arg(long)]
+    redis: Option<String>,
+
     /// Deterministic mode: the same query always returns the same garbage.
     #[arg(long, global = true)]
     seed: Option<u64>,
@@ -203,18 +207,22 @@ async fn main() -> std::io::Result<()> {
     info!("EtherealDB listening on {} (postgres protocol)", cli.pg);
     let pg = tokio::spawn(server::run(pg_listener, shared.clone(), Proto::Postgres));
 
-    let mysql = if let Some(addr) = &cli.mysql {
+    let mut extra = Vec::new();
+    if let Some(addr) = &cli.mysql {
         let l = TcpListener::bind(addr).await?;
         info!("EtherealDB listening on {addr} (mysql protocol)");
-        Some(tokio::spawn(server::run(l, shared.clone(), Proto::Mysql)))
-    } else {
-        None
-    };
+        extra.push(tokio::spawn(server::run(l, shared.clone(), Proto::Mysql)));
+    }
+    if let Some(addr) = &cli.redis {
+        let l = TcpListener::bind(addr).await?;
+        info!("EtherealDB listening on {addr} (redis protocol)");
+        extra.push(tokio::spawn(server::run(l, shared.clone(), Proto::Redis)));
+    }
 
-    // Both accept loops run forever; surface a panic from either.
+    // All accept loops run forever; surface a panic from any of them.
     pg.await.ok();
-    if let Some(m) = mysql {
-        m.await.ok();
+    for task in extra {
+        task.await.ok();
     }
     Ok(())
 }

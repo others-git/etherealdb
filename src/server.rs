@@ -30,6 +30,7 @@ impl Shared {
 pub enum Proto {
     Postgres,
     Mysql,
+    Redis,
 }
 
 /// Accept loop: each connection is handled by the frontend for `proto`.
@@ -42,6 +43,7 @@ pub async fn run(listener: TcpListener, shared: Arc<Shared>, proto: Proto) {
                     let res = match proto {
                         Proto::Postgres => proto::pg::handle(sock, shared).await,
                         Proto::Mysql => proto::mysql::handle(sock, shared).await,
+                        Proto::Redis => proto::resp::handle(sock, shared).await,
                     };
                     if let Err(e) = res {
                         debug!(%peer, ?proto, "connection ended: {e}");

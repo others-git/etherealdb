@@ -12,6 +12,6 @@ COPY docker/${TARGETARCH}/etherealdb /usr/local/bin/etherealdb
 RUN chmod +x /usr/local/bin/etherealdb
 
 USER ethereal
-EXPOSE 5432 3306
+EXPOSE 5432 3306 6379
 ENTRYPOINT ["etherealdb"]
-CMD ["--pg", "0.0.0.0:5432", "--mysql", "0.0.0.0:3306"]
+CMD ["--pg", "0.0.0.0:5432", "--mysql", "0.0.0.0:3306", "--redis", "0.0.0.0:6379"]
