@@ -56,6 +56,10 @@ literal sense.
   default schema, `LIMIT` is honored, `count(*)` returns one row.
 - Literals echo back (`SELECT 1` returns `1`), casts steer wire types
   (`x::int`), `SHOW server_version` answers politely.
+- **GUI-friendly**: `version()`, `current_database()`, `current_user` and
+  friends answer believably, and `pg_catalog`/`information_schema` queries
+  return *empty* result sets — so DBeaver/TablePlus/pgAdmin connect and show an
+  empty database instead of choking on fake catalog rows.
 - DML/DDL/transactions are cheerfully acknowledged and instantly forgotten.
 - **Crush mode** (`--crush`): unsafe queries trigger a streamed avalanche of
   rows to overload careless clients. See below.
@@ -88,8 +92,7 @@ NOTICE:  CRUSH MODE: this query asked for everything — here it comes
 on table reads with no row budget. The server itself streams in O(1) memory; the
 client is on its own.
 
-See [PLAN.md](PLAN.md) for the roadmap: GUI-client introspection stubs
-(DBeaver/TablePlus), MySQL, Redis.
+See [PLAN.md](PLAN.md) for the roadmap: MySQL, themes, Redis.
 
 ## Development
 

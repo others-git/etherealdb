@@ -578,8 +578,10 @@ fn normal_response(out: &mut BytesMut, shape: &ResultShape, cfg: &Config, stmt: 
         StmtKind::Empty => put_msg(out, b'I', |_| {}),
         StmtKind::Select => {
             // No FROM clause (SELECT 1, SELECT now()) yields exactly one row,
-            // like the real thing.
-            let mut n = if shape.aggregate_only() || shape.table_hint.is_none() {
+            // like the real thing; system-catalog queries yield zero.
+            let mut n = if shape.force_empty {
+                0
+            } else if shape.aggregate_only() || shape.table_hint.is_none() {
                 1
             } else {
                 rng.random_range(cfg.rows_min..=cfg.rows_max.max(cfg.rows_min))
@@ -666,7 +668,9 @@ async fn execute_portal(
 
         // Normal response.
         let mut rng = seed_rng(cfg, sql);
-        let mut n = if shape.aggregate_only() || shape.table_hint.is_none() {
+        let mut n = if shape.force_empty {
+            0
+        } else if shape.aggregate_only() || shape.table_hint.is_none() {
             1
         } else {
             rng.random_range(cfg.rows_min..=cfg.rows_max.max(cfg.rows_min))

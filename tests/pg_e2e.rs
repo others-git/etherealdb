@@ -273,3 +273,59 @@ async fn extended_crush_streams_many_rows() {
     assert_eq!(rows.len(), 15_000);
     let _id: i64 = rows[0].get(0);
 }
+
+// ---- GUI-client introspection stubs ----
+
+#[tokio::test]
+async fn introspection_functions_answer_believably() {
+    let port = start_server(None).await;
+    let client = connect(port).await;
+
+    let row = client.query_one("select version()", &[]).await.unwrap();
+    let v: &str = row.get(0);
+    assert!(v.starts_with("PostgreSQL"), "version() = {v}");
+
+    let row = client.query_one("select current_database()", &[]).await.unwrap();
+    let db: &str = row.get(0);
+    assert_eq!(db, "ethereal");
+
+    let row = client.query_one("select current_user", &[]).await.unwrap();
+    let u: &str = row.get(0);
+    assert_eq!(u, "ghost");
+}
+
+#[tokio::test]
+async fn catalog_queries_return_empty() {
+    let port = start_server(None).await;
+    let client = connect(port).await;
+
+    // GUI introspection should see an empty database, not garbage rows.
+    let rows = client.query("select typname from pg_catalog.pg_type", &[]).await.unwrap();
+    assert!(rows.is_empty(), "pg_type should be empty, got {}", rows.len());
+
+    let rows = client
+        .query("select table_name from information_schema.tables", &[])
+        .await
+        .unwrap();
+    assert!(rows.is_empty(), "information_schema.tables should be empty");
+}
+
+#[tokio::test]
+async fn catalog_query_is_not_crushed() {
+    // Even with an aggressive threshold, a `select *` against a catalog must
+    // never be crushed — that's how GUIs connect.
+    let cfg = Config {
+        crush: CrushConfig {
+            enabled: true,
+            threshold: etherealdb::shape::CrushThreshold::Star,
+            max_rows: 10_000_000,
+            ..CrushConfig::default()
+        },
+        ..Config::default()
+    };
+    let port = start_with(cfg).await;
+    let client = connect(port).await;
+
+    let rows = client.query("select * from pg_catalog.pg_class", &[]).await.unwrap();
+    assert!(rows.is_empty(), "catalog query must be empty, not crushed");
+}

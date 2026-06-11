@@ -43,6 +43,24 @@ pub struct ResultShape {
     pub select_star: bool,
     /// A top-level `WHERE` predicate is present on the base table.
     pub has_where: bool,
+    /// Query targets a system catalog (`pg_catalog`/`information_schema`); we
+    /// return zero rows so GUI clients see an empty database rather than a table
+    /// full of nonsense that breaks their introspection.
+    pub force_empty: bool,
+}
+
+impl Default for ResultShape {
+    fn default() -> Self {
+        Self {
+            kind: StmtKind::Empty,
+            columns: Vec::new(),
+            table_hint: None,
+            limit: None,
+            select_star: false,
+            has_where: false,
+            force_empty: false,
+        }
+    }
 }
 
 impl ResultShape {
@@ -55,7 +73,13 @@ impl ResultShape {
     /// Classify a query's crush risk against a threshold. Only table-backed,
     /// non-aggregate SELECTs can be unsafe; everything else is `Safe`.
     pub fn crush_class(&self, threshold: CrushThreshold) -> CrushClass {
-        if self.kind != StmtKind::Select || self.table_hint.is_none() || self.aggregate_only() {
+        if self.kind != StmtKind::Select
+            || self.table_hint.is_none()
+            || self.aggregate_only()
+            || self.force_empty
+        {
+            // Never crush a client's catalog introspection — it's how GUIs
+            // connect, not careless data dumping.
             return CrushClass::Safe;
         }
         let broad = self.select_star;
@@ -257,14 +281,7 @@ fn scan_words(s: &str) -> Vec<(String, usize, usize)> {
 pub fn extract(stmt: &str) -> ResultShape {
     let stmt = stmt.trim().trim_end_matches(';').trim();
     if stmt.is_empty() {
-        return ResultShape {
-            kind: StmtKind::Empty,
-            columns: vec![],
-            table_hint: None,
-            limit: None,
-            select_star: false,
-            has_where: false,
-        };
+        return ResultShape::default();
     }
     let words = scan_words(stmt);
     let first = words.first().map(|(w, _, _)| w.as_str()).unwrap_or("");
@@ -273,27 +290,18 @@ pub fn extract(stmt: &str) -> ResultShape {
         "select" | "with" | "table" => extract_select(stmt, &words),
         "insert" => ResultShape {
             kind: StmtKind::Insert,
-            columns: vec![],
             table_hint: word_after(&words, stmt, "into"),
-            limit: None,
-            select_star: false,
-            has_where: false,
+            ..Default::default()
         },
         "update" => ResultShape {
             kind: StmtKind::Update,
-            columns: vec![],
             table_hint: word_after(&words, stmt, "update"),
-            limit: None,
-            select_star: false,
-            has_where: false,
+            ..Default::default()
         },
         "delete" => ResultShape {
             kind: StmtKind::Delete,
-            columns: vec![],
             table_hint: word_after(&words, stmt, "from"),
-            limit: None,
-            select_star: false,
-            has_where: false,
+            ..Default::default()
         },
         "show" => {
             // SHOW x -> one column named x, one row. A couple of params get
@@ -313,10 +321,8 @@ pub fn extract(stmt: &str) -> ResultShape {
                     literal: Some((value, WireType::Text)),
                     aggregate: false,
                 }],
-                table_hint: None,
                 limit: Some(1),
-                select_star: false,
-                has_where: false,
+                ..Default::default()
             }
         }
         _ => {
@@ -327,29 +333,38 @@ pub fn extract(stmt: &str) -> ResultShape {
                     tag = format!("{tag} {}", w.to_ascii_uppercase());
                 }
             }
-            ResultShape {
-                kind: StmtKind::Command(tag),
-                columns: vec![],
-                table_hint: None,
-                limit: None,
-                select_star: false,
-                has_where: false,
-            }
+            ResultShape { kind: StmtKind::Command(tag), ..Default::default() }
         }
     }
 }
 
-fn word_after(words: &[(String, usize, usize)], stmt: &str, kw: &str) -> Option<String> {
+/// The raw (possibly schema-qualified, possibly quoted) token following `kw`.
+fn raw_after<'a>(words: &[(String, usize, usize)], stmt: &'a str, kw: &str) -> Option<&'a str> {
     let pos = words.iter().position(|(w, _, _)| w == kw)?;
-    // The table name may be quoted/schema-qualified, so read raw chars after
-    // the keyword rather than relying on the word scanner.
     let after = stmt[words[pos].2..].trim_start();
     let end = after
         .find(|c: char| c.is_whitespace() || matches!(c, ',' | ';' | '(' | ')'))
         .unwrap_or(after.len());
-    let raw = &after[..end];
+    let raw = after[..end].trim();
+    if raw.is_empty() { None } else { Some(raw) }
+}
+
+fn word_after(words: &[(String, usize, usize)], stmt: &str, kw: &str) -> Option<String> {
+    let raw = raw_after(words, stmt, kw)?;
     let name = raw.rsplit('.').next().unwrap_or(raw).trim_matches('"');
     if name.is_empty() { None } else { Some(name.to_ascii_lowercase()) }
+}
+
+/// True when a FROM target is a Postgres system catalog — either schema-
+/// qualified (`pg_catalog.*`, `information_schema.*`) or a bare `pg_*` relation.
+fn is_system_catalog(raw: &str) -> bool {
+    let lower = raw.to_ascii_lowercase();
+    let lower = lower.trim_matches('"');
+    let schema = lower.split('.').next().unwrap_or(lower);
+    let relation = lower.rsplit('.').next().unwrap_or(lower);
+    matches!(schema, "pg_catalog" | "information_schema")
+        || relation.starts_with("pg_")
+        || schema == "information_schema"
 }
 
 fn extract_select(stmt: &str, words: &[(String, usize, usize)]) -> ResultShape {
@@ -357,14 +372,7 @@ fn extract_select(stmt: &str, words: &[(String, usize, usize)]) -> ResultShape {
     // first top-level "select" is the main one.
     let sel = words.iter().position(|(w, _, _)| w == "select");
     let Some(sel) = sel else {
-        return ResultShape {
-            kind: StmtKind::Command("SELECT".into()),
-            columns: vec![],
-            table_hint: None,
-            limit: None,
-            select_star: false,
-            has_where: false,
-        };
+        return ResultShape { kind: StmtKind::Command("SELECT".into()), ..Default::default() };
     };
 
     const LIST_END: &[&str] =
@@ -397,6 +405,7 @@ fn extract_select(stmt: &str, words: &[(String, usize, usize)]) -> ResultShape {
     }
 
     let table_hint = word_after(words, stmt, "from");
+    let force_empty = raw_after(words, stmt, "from").is_some_and(is_system_catalog);
     let limit = words
         .iter()
         .position(|(w, _, _)| w == "limit")
@@ -406,7 +415,15 @@ fn extract_select(stmt: &str, words: &[(String, usize, usize)]) -> ResultShape {
     // parens) does not count as a predicate on the base table.
     let has_where = words.iter().any(|(w, _, _)| w == "where");
 
-    ResultShape { kind: StmtKind::Select, columns, table_hint, limit, select_star, has_where }
+    ResultShape {
+        kind: StmtKind::Select,
+        columns,
+        table_hint,
+        limit,
+        select_star,
+        has_where,
+        force_empty,
+    }
 }
 
 fn parse_item(item: &str, out: &mut Vec<ColumnSpec>) {
@@ -477,6 +494,30 @@ fn find_top_level_cast(s: &str) -> Option<usize> {
     found
 }
 
+/// Believable values for the scalar introspection functions and keywords that
+/// GUI clients (DBeaver, TablePlus, pgAdmin) fire during connection setup.
+/// Returns the conventional column name, the value, and its wire type.
+fn scalar_introspection(name: &str) -> Option<(&'static str, String, WireType)> {
+    let v = |s: &str| s.to_string();
+    Some(match name {
+        "version" => (
+            "version",
+            v("PostgreSQL 16.3 (EtherealDB 0.1.0) on x86_64-pc-linux-gnu"),
+            WireType::Text,
+        ),
+        "current_database" | "current_catalog" => ("current_database", v("ethereal"), WireType::Text),
+        "current_schema" => ("current_schema", v("public"), WireType::Text),
+        "current_user" | "current_role" | "session_user" => {
+            ("current_user", v("ghost"), WireType::Text)
+        }
+        "pg_backend_pid" => ("pg_backend_pid", v("12345"), WireType::Int4),
+        "pg_postmaster_start_time" => {
+            ("pg_postmaster_start_time", v("2026-01-01 00:00:00"), WireType::Timestamp)
+        }
+        _ => return None,
+    })
+}
+
 fn classify_expr(expr: &str) -> ColumnSpec {
     let expr = expr.trim();
 
@@ -510,9 +551,18 @@ fn classify_expr(expr: &str) -> ColumnSpec {
     // function call: name(...)
     if let Some(paren) = expr.find('(') {
         let fname = expr[..paren].trim().to_ascii_lowercase();
+        let bare = fname.rsplit('.').next().unwrap_or(&fname);
+        if let Some((col, value, wt)) = scalar_introspection(bare) {
+            return ColumnSpec {
+                name: col.into(),
+                cast: None,
+                literal: Some((value, wt)),
+                aggregate: false,
+            };
+        }
         if !fname.is_empty() && fname.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
             let aggregate = matches!(fname.as_str(), "count" | "sum" | "avg" | "min" | "max");
-            let mut spec = ColumnSpec::named(fname.rsplit('.').next().unwrap_or(&fname));
+            let mut spec = ColumnSpec::named(bare);
             spec.aggregate = aggregate;
             return spec;
         }
@@ -521,6 +571,15 @@ fn classify_expr(expr: &str) -> ColumnSpec {
     // plain (possibly qualified) identifier: u.email -> email
     let name = expr.rsplit('.').next().unwrap_or(expr).trim().trim_matches('"');
     if !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == ' ') {
+        // bare keyword forms: current_user, current_schema, ... (no parens)
+        if let Some((col, value, wt)) = scalar_introspection(&name.to_ascii_lowercase()) {
+            return ColumnSpec {
+                name: col.into(),
+                cast: None,
+                literal: Some((value, wt)),
+                aggregate: false,
+            };
+        }
         return ColumnSpec::named(name);
     }
 
@@ -621,6 +680,44 @@ mod tests {
         let s = extract("SHOW server_version");
         assert_eq!(s.columns[0].name, "server_version");
         assert!(s.columns[0].literal.as_ref().unwrap().0.contains("EtherealDB"));
+    }
+
+    #[test]
+    fn scalar_introspection_functions() {
+        let s = extract("select version()");
+        assert_eq!(s.columns[0].name, "version");
+        assert!(s.columns[0].literal.as_ref().unwrap().0.starts_with("PostgreSQL"));
+
+        let s = extract("SELECT current_database()");
+        assert_eq!(s.columns[0].name, "current_database");
+        assert_eq!(s.columns[0].literal.as_ref().unwrap().0, "ethereal");
+
+        // bare keyword form, no parens
+        let s = extract("select current_user");
+        assert_eq!(s.columns[0].name, "current_user");
+        assert_eq!(s.columns[0].literal.as_ref().unwrap().0, "ghost");
+
+        // pg_catalog-qualified function still resolves
+        let s = extract("select pg_catalog.version()");
+        assert_eq!(s.columns[0].name, "version");
+    }
+
+    #[test]
+    fn system_catalog_queries_force_empty_and_safe() {
+        for q in [
+            "select * from pg_catalog.pg_type",
+            "SELECT typname FROM pg_type",
+            "select table_name from information_schema.tables",
+            "select * from information_schema.columns where table_name = 'x'",
+        ] {
+            let s = extract(q);
+            assert!(s.force_empty, "should be force_empty: {q}");
+            assert_eq!(s.crush_class(CrushThreshold::All3), CrushClass::Safe, "{q}");
+            assert_eq!(s.crush_class(CrushThreshold::Star), CrushClass::Safe, "{q}");
+        }
+        // a normal table is not a catalog
+        assert!(!extract("select * from pginfo").force_empty); // doesn't start with pg_
+        assert!(!extract("select * from users").force_empty);
     }
 
     fn is_crush(c: CrushClass) -> bool {

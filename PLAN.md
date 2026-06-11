@@ -243,9 +243,10 @@ In crush mode, every unsafe query is logged at `WARN` level with:
 - **M2 — Postgres simple query**: `psql -c "select id, email, created_at from users"` returns plausible rows. **First demo-able milestone.** ✅
 - **M3 — Postgres extended query protocol**: Parse/Bind/Describe/Execute with text + binary result encoding and inferred parameter types — ORMs and drivers using `query()` connect. ✅
 - **M4 — Crush mode**: streaming unsafe-query detection + client overload. ✅ (works in both simple and extended paths)
-- **M5 — MySQL frontend**.
-- **M6 — Themes + custom rules**.
-- **M7 — Redis/RESP**.
+- **M5 — GUI introspection stubs**: `version()`/`current_*` answer believably; `pg_catalog`/`information_schema` queries return empty result sets (never crushed) so DBeaver/TablePlus connect cleanly. ✅
+- **M6 — MySQL frontend**.
+- **M7 — Themes + custom rules**.
+- **M8 — Redis/RESP**.
 
 ## 10. Key risks / unknowns
 
@@ -258,3 +259,10 @@ In crush mode, every unsafe query is logged at `WARN` level with:
 
 1. **Priority protocol** — start with Postgres (recommended) or something else?
 2. **Default behavior** — fully random each call, or deterministic-by-seed by default?
+
+---
+
+make a dockerfile
+
+setup github actions
+
