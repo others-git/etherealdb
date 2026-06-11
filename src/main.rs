@@ -6,9 +6,9 @@ use tracing::{info, warn};
 
 use std::path::PathBuf;
 
-use etherealdb::config::{Config, CrushConfig};
-use etherealdb::generate::generate;
-use etherealdb::infer::{Rules, infer_with};
+use etherealdb::config::{Config, CrushConfig, GhostConfig};
+use etherealdb::generate::{Gen, gen_value};
+use etherealdb::infer::{Rules, infer_with, wire_type};
 use etherealdb::server::{self, Proto, Shared};
 use etherealdb::shape::CrushThreshold;
 use etherealdb::theme::{self, ThemeData};
@@ -65,6 +65,27 @@ struct Cli {
     #[arg(long, default_value_t = 4)]
     crush_concurrency: usize,
 
+    // --- ghosts: fault injection + value fuzzing for client resilience tests ---
+    /// Chance [0..1] of delaying a response (haunting latency).
+    #[arg(long, default_value_t = 0.0)]
+    ghost_latency: f64,
+
+    /// Latency band in ms when a delay is injected, as min:max.
+    #[arg(long, default_value = "50:500", value_parser = parse_band_u64)]
+    ghost_latency_ms: (u64, u64),
+
+    /// Chance [0..1] of answering a command with a protocol error.
+    #[arg(long, default_value_t = 0.0)]
+    ghost_errors: f64,
+
+    /// Chance [0..1] of dropping the connection mid-conversation.
+    #[arg(long, default_value_t = 0.0)]
+    ghost_drops: f64,
+
+    /// Chance [0..1], per value, of emitting a pathological value to fuzz the client.
+    #[arg(long, default_value_t = 0.0, global = true)]
+    fuzz: f64,
+
     #[command(subcommand)]
     cmd: Option<Cmd>,
 }
@@ -114,6 +135,11 @@ fn parse_band(s: &str) -> Result<(usize, usize), String> {
     Ok((lo, hi))
 }
 
+fn parse_band_u64(s: &str) -> Result<(u64, u64), String> {
+    let (lo, hi) = parse_band(s)?;
+    Ok((lo as u64, hi as u64))
+}
+
 fn parse_theme(s: &str) -> Result<&'static ThemeData, String> {
     theme::by_name(s)
         .ok_or_else(|| format!("unknown theme `{s}` (try: {})", theme::names().join(", ")))
@@ -140,14 +166,18 @@ async fn main() -> std::io::Result<()> {
 
     if let Some(Cmd::Infer { names }) = &cli.cmd {
         let rules = load_rules(cli.rules.as_ref());
-        let theme = cli.theme;
+        let g = Gen {
+            theme: cli.theme,
+            fuzz: cli.fuzz,
+        };
         let mut rng = match cli.seed {
             Some(s) => ChaCha8Rng::seed_from_u64(s),
             None => ChaCha8Rng::from_os_rng(),
         };
         for name in names {
             let st = infer_with(name, &rules);
-            let samples: Vec<String> = (0..3).map(|_| generate(st, &mut rng, theme)).collect();
+            let wt = wire_type(st);
+            let samples: Vec<String> = (0..3).map(|_| gen_value(st, wt, &mut rng, g)).collect();
             println!(
                 "{name:<24} {:<14} {}",
                 format!("{st:?}"),
@@ -178,6 +208,13 @@ async fn main() -> std::io::Result<()> {
         },
         theme: cli.theme,
         rules,
+        ghosts: GhostConfig {
+            latency_prob: cli.ghost_latency,
+            latency_ms: cli.ghost_latency_ms,
+            error_prob: cli.ghost_errors,
+            drop_prob: cli.ghost_drops,
+            fuzz: cli.fuzz,
+        },
     };
 
     if let Some(seed) = cfg.seed {
@@ -188,6 +225,15 @@ async fn main() -> std::io::Result<()> {
     }
     if !cfg.rules.is_empty() {
         info!("loaded {} custom inference rule(s)", cfg.rules.len());
+    }
+    if cfg.ghosts.haunting() || cfg.ghosts.fuzz > 0.0 {
+        warn!(
+            latency = cfg.ghosts.latency_prob,
+            errors = cfg.ghosts.error_prob,
+            drops = cfg.ghosts.drop_prob,
+            fuzz = cfg.ghosts.fuzz,
+            "👻 ghosts are loose — clients will see latency, errors, drops, and/or junk"
+        );
     }
     if cfg.crush.enabled {
         if cfg.crush.warn_only {

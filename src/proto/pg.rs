@@ -15,11 +15,10 @@ use tokio::net::TcpStream;
 use tracing::{debug, info, warn};
 
 use crate::config::{Config, fnv64};
-use crate::generate::generate;
+use crate::generate::{Gen, gen_value};
 use crate::infer::WireType;
 use crate::server::Shared;
 use crate::shape::{self, CrushClass, Resolved, ResultShape, StmtKind};
-use crate::theme::ThemeData;
 
 /// Rows flushed to the wire per write during a crush stream. Keeps server-side
 /// memory flat no matter how many rows we promise the client.
@@ -324,6 +323,28 @@ pub async fn handle(mut stream: TcpStream, shared: Arc<Shared>) -> std::io::Resu
         let mut payload = vec![0u8; len - 4];
         stream.read_exact(&mut payload).await?;
 
+        // --- ghosts: haunt query-bearing messages ('Q' simple, 'E' execute)
+        let ghosts = &shared.cfg.ghosts;
+        if ghosts.haunting() && matches!(tag, b'Q' | b'E') {
+            ghosts.maybe_latency().await;
+            if ghosts.maybe_drop() {
+                debug!(%peer, "ghost: dropping connection");
+                return Ok(());
+            }
+            if ghosts.maybe_error() {
+                debug!(%peer, "ghost: injecting error");
+                let mut e = BytesMut::new();
+                put_error(&mut e, "58000", "a ghost ate your query");
+                // After a simple query the server owns ReadyForQuery; in the
+                // extended protocol the client's Sync drives it instead.
+                if tag == b'Q' {
+                    put_ready(&mut e);
+                }
+                stream.write_all(&e).await?;
+                continue;
+            }
+        }
+
         let mut out = BytesMut::with_capacity(8192);
         match tag {
             // --- simple query
@@ -470,8 +491,8 @@ fn put_row_description(out: &mut BytesMut, cols: &[Resolved]) {
 }
 
 /// Append one DataRow ('D') of freshly generated values, in text format.
-fn put_data_row(out: &mut BytesMut, cols: &[Resolved], rng: &mut impl Rng, theme: &ThemeData) {
-    put_data_row_fmt(out, cols, rng, &[], theme);
+fn put_data_row(out: &mut BytesMut, cols: &[Resolved], rng: &mut impl Rng, g: Gen) {
+    put_data_row_fmt(out, cols, rng, &[], g);
 }
 
 /// The result format for column `i` given Bind's format codes: empty = all
@@ -490,14 +511,14 @@ fn put_data_row_fmt(
     cols: &[Resolved],
     rng: &mut impl Rng,
     formats: &[i16],
-    theme: &ThemeData,
+    g: Gen,
 ) {
     put_msg(out, b'D', |b| {
         b.put_i16(cols.len() as i16);
         for (i, c) in cols.iter().enumerate() {
             let text = match &c.literal {
                 Some(v) => v.clone(),
-                None => generate(c.st, rng, theme),
+                None => gen_value(c.st, c.wt, rng, g),
             };
             if format_for(formats, i) == 1 {
                 let bin = text_to_binary(c.wt, &text);
@@ -624,7 +645,7 @@ fn normal_response(out: &mut BytesMut, shape: &ResultShape, cfg: &Config, stmt: 
             let cols = resolve_cols(shape, cfg);
             put_row_description(out, &cols);
             for _ in 0..n {
-                put_data_row(out, &cols, &mut rng, cfg.theme);
+                put_data_row(out, &cols, &mut rng, cfg.gen_ctx());
             }
             put_command_complete(out, &format!("SELECT {n}"));
         }
@@ -678,8 +699,15 @@ async fn execute_portal(
                 put_notice(&mut notice, CRUSH_NOTICE);
                 stream.write_all(&notice).await?;
                 let rng = seed_rng(cfg, sql);
-                return match stream_rows(stream, &cols, formats, cfg.crush.max_rows, rng, cfg.theme)
-                    .await
+                return match stream_rows(
+                    stream,
+                    &cols,
+                    formats,
+                    cfg.crush.max_rows,
+                    rng,
+                    cfg.gen_ctx(),
+                )
+                .await
                 {
                     Ok(n) => {
                         info!(%peer, rows = n, "crush complete");
@@ -730,7 +758,7 @@ async fn execute_portal(
             n = n.min(max_rows as usize);
         }
         for _ in 0..n {
-            put_data_row_fmt(out, &cols, &mut rng, formats, cfg.theme);
+            put_data_row_fmt(out, &cols, &mut rng, formats, cfg.gen_ctx());
         }
         put_command_complete(out, &format!("SELECT {n}"));
         return Ok(());
@@ -783,7 +811,7 @@ async fn crush_stream(
         return Err((0, e));
     }
     let rng = seed_rng(cfg, stmt);
-    stream_rows(stream, &cols, &[], cfg.crush.max_rows, rng, cfg.theme).await
+    stream_rows(stream, &cols, &[], cfg.crush.max_rows, rng, cfg.gen_ctx()).await
 }
 
 const CRUSH_NOTICE: &str = "CRUSH MODE: this query asked for everything — here it comes";
@@ -806,7 +834,7 @@ async fn stream_rows(
     formats: &[i16],
     max: u64,
     mut rng: ChaCha8Rng,
-    theme: &ThemeData,
+    g: Gen<'_>,
 ) -> Result<u64, (u64, std::io::Error)> {
     let mut sent: u64 = 0;
     let mut chunk = BytesMut::with_capacity(64 * 1024);
@@ -814,7 +842,7 @@ async fn stream_rows(
         let this = CRUSH_CHUNK.min(max - sent);
         chunk.clear();
         for _ in 0..this {
-            put_data_row_fmt(&mut chunk, cols, &mut rng, formats, theme);
+            put_data_row_fmt(&mut chunk, cols, &mut rng, formats, g);
         }
         if let Err(e) = stream.write_all(&chunk).await {
             return Err((sent, e));

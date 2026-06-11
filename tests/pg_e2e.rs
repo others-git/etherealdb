@@ -428,3 +428,78 @@ async fn custom_rules_override_inference() {
         );
     }
 }
+
+// ---- Ghosts: fault injection & fuzzing ----
+
+use etherealdb::config::GhostConfig;
+
+#[tokio::test]
+async fn ghost_error_makes_query_fail() {
+    let cfg = Config {
+        ghosts: GhostConfig {
+            error_prob: 1.0,
+            ..GhostConfig::default()
+        },
+        ..Config::default()
+    };
+    let port = start_with(cfg).await;
+    let client = connect(port).await;
+
+    // Connect succeeds (ghosts only haunt queries); the query gets an error.
+    let err = client
+        .simple_query("select id from users")
+        .await
+        .unwrap_err();
+    let db = err.as_db_error().expect("should be a server error");
+    assert!(
+        db.message().contains("ghost"),
+        "expected a ghostly error: {}",
+        db.message()
+    );
+}
+
+#[tokio::test]
+async fn ghost_drop_kills_the_connection() {
+    let cfg = Config {
+        ghosts: GhostConfig {
+            drop_prob: 1.0,
+            ..GhostConfig::default()
+        },
+        ..Config::default()
+    };
+    let port = start_with(cfg).await;
+    let client = connect(port).await;
+
+    // The server drops the connection rather than answering.
+    assert!(client.simple_query("select 1").await.is_err());
+}
+
+#[tokio::test]
+async fn fuzz_emits_pathological_values_without_crashing() {
+    let cfg = Config {
+        seed: Some(1),
+        ghosts: GhostConfig {
+            fuzz: 1.0,
+            ..GhostConfig::default()
+        },
+        ..Config::default()
+    };
+    let port = start_with(cfg).await;
+    let client = connect(port).await;
+
+    // Every value is a ghost value; the server must stay up and keep framing
+    // correct, and an `id` column should NOT always be a clean integer.
+    let msgs = client
+        .simple_query("select id from accounts limit 12")
+        .await
+        .unwrap();
+    let rows = rows(&msgs);
+    assert!(!rows.is_empty());
+    let all_clean_ints = rows
+        .iter()
+        .all(|r| r.get(0).unwrap().parse::<i64>().is_ok());
+    assert!(
+        !all_clean_ints,
+        "fuzz should produce some non-integer id values"
+    );
+}

@@ -18,11 +18,10 @@ use tokio::net::TcpStream;
 use tracing::{debug, info, warn};
 
 use crate::config::{Config, fnv64};
-use crate::generate::generate;
+use crate::generate::{Gen, gen_value};
 use crate::infer::WireType;
 use crate::server::Shared;
 use crate::shape::{self, CrushClass, Resolved, ResultShape, StmtKind};
-use crate::theme::ThemeData;
 
 // --- capability flags (server advertises a useful subset) ---
 const CLIENT_LONG_PASSWORD: u32 = 0x0000_0001;
@@ -102,11 +101,11 @@ fn mysql_type(wt: WireType) -> u8 {
 
 /// Render a generated value in MySQL's expected text form. Only booleans differ
 /// from the Postgres text we generate: MySQL wants `1`/`0`, not `t`/`f`.
-fn mysql_value(c: &Resolved, rng: &mut impl Rng, theme: &ThemeData) -> String {
+fn mysql_value(c: &Resolved, rng: &mut impl Rng, g: Gen) -> String {
     if let Some(lit) = &c.literal {
         return lit.clone();
     }
-    let v = generate(c.st, rng, theme);
+    let v = gen_value(c.st, c.wt, rng, g);
     if c.wt == WireType::Bool {
         if v == "t" { "1".into() } else { "0".into() }
     } else {
@@ -223,10 +222,10 @@ fn column_def(c: &Resolved) -> BytesMut {
     b
 }
 
-fn text_row(cols: &[Resolved], rng: &mut impl Rng, theme: &ThemeData) -> BytesMut {
+fn text_row(cols: &[Resolved], rng: &mut impl Rng, g: Gen) -> BytesMut {
     let mut b = BytesMut::new();
     for c in cols {
-        put_lenenc_str(&mut b, &mysql_value(c, rng, theme));
+        put_lenenc_str(&mut b, &mysql_value(c, rng, g));
     }
     b
 }
@@ -260,6 +259,21 @@ pub async fn handle(stream: TcpStream, shared: Arc<Shared>) -> std::io::Result<(
             COM_QUERY => {
                 let sql = String::from_utf8_lossy(rest).into_owned();
                 debug!(%peer, %sql, "mysql query");
+                // --- ghosts: haunt the query
+                let ghosts = &shared.cfg.ghosts;
+                if ghosts.haunting() {
+                    ghosts.maybe_latency().await;
+                    if ghosts.maybe_drop() {
+                        debug!(%peer, "ghost: dropping connection");
+                        return Ok(());
+                    }
+                    if ghosts.maybe_error() {
+                        debug!(%peer, "ghost: injecting error");
+                        conn.write_packet(&err_packet(1105, "HY000", "a ghost ate your query"))
+                            .await?;
+                        continue;
+                    }
+                }
                 run_query(&mut conn, &sql, &shared, peer).await?;
             }
             COM_STMT_PREPARE => {
@@ -424,7 +438,7 @@ async fn select_response(
 
     send_result_header(conn, &cols).await?;
     for _ in 0..n {
-        let row = text_row(&cols, &mut rng, cfg.theme);
+        let row = text_row(&cols, &mut rng, cfg.gen_ctx());
         conn.write_packet(&row).await?;
     }
     conn.write_packet(&eof_packet()).await
@@ -467,7 +481,7 @@ async fn crush_stream(
     while sent < max {
         let this = CRUSH_CHUNK.min(max - sent);
         for _ in 0..this {
-            let row = text_row(cols, &mut rng, cfg.theme);
+            let row = text_row(cols, &mut rng, cfg.gen_ctx());
             if let Err(e) = conn.write_packet(&row).await {
                 warn!(%peer, rows = sent, "crush aborted: client gave up");
                 return Err(e);

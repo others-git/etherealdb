@@ -52,6 +52,8 @@ etherealdb --rows 100:500           # row-count band when there's no LIMIT
 etherealdb --theme ecommerce        # domain-flavored values (see below)
 etherealdb --rules my-rules.txt     # custom inference rules (see below)
 etherealdb --crush                  # crush mode (see below)
+etherealdb --ghost-errors 0.2       # haunt 20% of queries with errors (see below)
+etherealdb --fuzz 0.1               # 10% of values are pathological junk
 etherealdb infer email user_id ...  # ask the inference engine directly
 ```
 
@@ -119,6 +121,35 @@ on table reads with no row budget. The server itself streams in O(1) memory; the
 client is on its own.
 
 See [PLAN.md](PLAN.md) for the roadmap: themes, custom inference rules, Redis.
+
+## Ghosts: fault injection & fuzzing
+
+Real databases are flaky. **Ghosts** haunt the server so you can test whether
+your client survives a half-real backend — latency spikes, the odd error,
+dropped connections, and corrupt values — across *all three* protocols.
+
+```sh
+etherealdb --ghost-latency 0.3 --ghost-latency-ms 50:800  # 30% of queries lag
+etherealdb --ghost-errors 0.15    # 15% answered with a protocol error
+etherealdb --ghost-drops 0.05     # 5% drop the connection mid-conversation
+etherealdb --fuzz 0.2             # 20% of values are pathological junk
+```
+
+`--fuzz` makes EtherealDB a **client fuzzer**: per value, it emits something
+designed to break naive decoders — empty strings, 16 KB blobs, `NaN`,
+`-Infinity`, `2026-13-45`, embedded NULs, RTL/emoji/unicode, huge integers —
+chosen to antagonise that column's declared type. Great for finding where a
+driver or ORM assumes the database always behaves.
+
+```
+$ etherealdb infer id email created_at --fuzz 1.0
+id           IdInt        99999999999999999999999999 | -Infinity | AAAA…(4 KB)
+email        Email        Ω≈ç√∫˜µ≤≥÷ | \x00\x01\x02 | NaN
+created_at   Timestamp    9999-99-99 99:99:99 |  | not-a-date
+```
+
+Ghost decisions use a separate RNG, so `--seed` still gives deterministic
+*data* while faults stay random. All knobs default to off.
 
 ## Themes & custom rules
 

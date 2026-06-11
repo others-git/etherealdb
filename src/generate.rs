@@ -4,8 +4,104 @@
 use rand::Rng;
 use rand::seq::IndexedRandom;
 
-use crate::infer::SemanticType;
+use crate::infer::{SemanticType, WireType};
 use crate::theme::ThemeData;
+
+/// The value-generation context: which theme to draw from, and how often to
+/// emit a pathological "ghost" value instead (to stress client parsers).
+#[derive(Clone, Copy)]
+pub struct Gen<'a> {
+    pub theme: &'a ThemeData,
+    pub fuzz: f64,
+}
+
+impl<'a> Gen<'a> {
+    /// A plain (non-fuzzing) context for a theme.
+    pub fn new(theme: &'a ThemeData) -> Self {
+        Gen { theme, fuzz: 0.0 }
+    }
+}
+
+/// Generate a value, occasionally substituting a pathological one when fuzzing
+/// is enabled. `wt` is the column's declared wire type, so the ghost value can
+/// be chosen to specifically antagonise that type's decoder.
+pub fn gen_value(st: SemanticType, wt: WireType, rng: &mut impl Rng, g: Gen) -> String {
+    if g.fuzz > 0.0 && rng.random_bool(g.fuzz.clamp(0.0, 1.0)) {
+        fuzz_value(wt, rng)
+    } else {
+        generate(st, rng, g.theme)
+    }
+}
+
+/// Strings designed to break naive client decoders, regardless of type.
+static NASTY: &[&str] = &[
+    "",
+    " ",
+    "\t\n\r",
+    "NULL",
+    "null",
+    "undefined",
+    "NaN",
+    "Infinity",
+    "-0",
+    "0x1F",
+    "1e400",
+    "9999999999999999999999999999",
+    "-9223372036854775809",
+    "'; DROP TABLE users; --",
+    "\"}{[]",
+    "\\x00\\x01\\x02",
+    "../../etc/passwd",
+    "Ω≈ç√∫˜µ≤≥÷",
+    "👻🦇💀 ʇxǝʇ",
+    "\u{202e}txet desrever",
+    "🇯🇵🇧🇷",
+    "line1\nline2\0embedded-nul",
+];
+
+/// A pathological value of (or contradicting) the given wire type.
+fn fuzz_value(wt: WireType, rng: &mut impl Rng) -> String {
+    // Sometimes a very long string, whatever the type — buffer-size bait.
+    if rng.random_bool(0.15) {
+        let len = rng.random_range(4096..16_384);
+        return "A".repeat(len);
+    }
+    match wt {
+        WireType::Bool => ["2", "-1", "maybe", "", "TRUE", "t\0"]
+            .choose(rng)
+            .unwrap()
+            .to_string(),
+        WireType::Int4 | WireType::Int8 | WireType::Float8 | WireType::Numeric => [
+            "NaN",
+            "Infinity",
+            "-Infinity",
+            "1e999",
+            "0x7fffffff",
+            "99999999999999999999999999",
+            "-9223372036854775809",
+            "",
+            "  12 34 ",
+        ]
+        .choose(rng)
+        .unwrap()
+        .to_string(),
+        WireType::Date | WireType::Time | WireType::Timestamp => [
+            "0000-00-00",
+            "2026-13-45",
+            "not-a-date",
+            "9999-99-99 99:99:99",
+            "",
+        ]
+        .choose(rng)
+        .unwrap()
+        .to_string(),
+        WireType::Uuid => ["not-a-uuid", "", "zzzzzzzz-zzzz-zzzz-zzzz-zzzzzzzzzzzz"]
+            .choose(rng)
+            .unwrap()
+            .to_string(),
+        WireType::Text | WireType::Json => NASTY.choose(rng).unwrap().to_string(),
+    }
+}
 
 static FIRST_NAMES: &[&str] = &[
     "Alice", "Marcus", "Yuki", "Priya", "Omar", "Ingrid", "Chen", "Fatima", "Diego", "Astrid",

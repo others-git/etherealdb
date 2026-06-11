@@ -7,7 +7,7 @@ license = "MIT"
 repository = "https://github.com/others-git/etherealdb"
 
 [dependencies]
-tokio = { version = "1", features = ["rt-multi-thread", "net", "io-util", "macros", "signal", "sync"] }
+tokio = { version = "1", features = ["rt-multi-thread", "net", "io-util", "macros", "signal", "sync", "time"] }
 bytes = "1"
 rand = "0.9"
 rand_chacha = "0.9"

@@ -17,7 +17,7 @@ use tokio::net::TcpStream;
 use tracing::{debug, info, warn};
 
 use crate::config::{Config, fnv64};
-use crate::generate::generate;
+use crate::generate::gen_value;
 use crate::infer::WireType;
 use crate::server::Shared;
 use crate::shape::Resolved;
@@ -156,7 +156,7 @@ fn value_for_key(key: &[u8], cfg: &Config, rng: &mut impl Rng) -> String {
     let key = String::from_utf8_lossy(key);
     let field = key.rsplit(':').next().unwrap_or(&key);
     let r = Resolved::from_name(field, &cfg.rules);
-    let v = generate(r.st, rng, cfg.theme);
+    let v = gen_value(r.st, r.wt, rng, cfg.gen_ctx());
     // Redis stores strings; booleans read more naturally as 1/0.
     if r.wt == WireType::Bool {
         if v == "t" { "1".into() } else { "0".into() }
@@ -190,6 +190,23 @@ pub async fn handle(stream: TcpStream, shared: Arc<Shared>) -> std::io::Result<(
         }
         let cmd = String::from_utf8_lossy(&args[0]).to_ascii_uppercase();
         debug!(%peer, %cmd, "redis command");
+
+        // --- ghosts: haunt the command (QUIT still gets through cleanly)
+        let ghosts = &cfg.ghosts;
+        if ghosts.haunting() && cmd != "QUIT" {
+            ghosts.maybe_latency().await;
+            if ghosts.maybe_drop() {
+                debug!(%peer, "ghost: dropping connection");
+                return Ok(());
+            }
+            if ghosts.maybe_error() {
+                debug!(%peer, "ghost: injecting error");
+                let mut e = Vec::new();
+                error(&mut e, "ERR a ghost ate your command");
+                io.write_all(&e).await?;
+                continue;
+            }
+        }
 
         // KEYS * under crush mode streams an avalanche of fake keys.
         if cmd == "KEYS" && cfg.crush.enabled && !cfg.crush.warn_only {
