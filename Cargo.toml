@@ -6,7 +6,7 @@ description = "A database that isn't there: speaks real wire protocols, returns 
 license = "MIT"
 
 [dependencies]
-tokio = { version = "1", features = ["rt-multi-thread", "net", "io-util", "macros", "signal"] }
+tokio = { version = "1", features = ["rt-multi-thread", "net", "io-util", "macros", "signal", "sync"] }
 bytes = "1"
 rand = "0.9"
 rand_chacha = "0.9"

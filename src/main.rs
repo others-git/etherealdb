@@ -1,15 +1,16 @@
 use std::sync::Arc;
 
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
 use tokio::net::TcpListener;
-use tracing::info;
+use tracing::{info, warn};
 
-use etherealdb::config::Config;
+use etherealdb::config::{Config, CrushConfig};
 use etherealdb::generate::generate;
 use etherealdb::infer::infer;
 use etherealdb::server;
+use etherealdb::shape::CrushThreshold;
 
 #[derive(Parser)]
 #[command(name = "etherealdb", version, about = "A database that isn't there.")]
@@ -26,8 +27,55 @@ struct Cli {
     #[arg(long, default_value = "5:20", value_parser = parse_band)]
     rows: (usize, usize),
 
+    /// Crush mode: bury clients that send unsafe queries (no columns / WHERE /
+    /// LIMIT) under a torrent of type-correct rows.
+    #[arg(long)]
+    crush: bool,
+
+    /// Max rows streamed per crushed query.
+    #[arg(long, default_value_t = 5_000_000)]
+    crush_rows: u64,
+
+    /// Detect and log unsafe queries, but answer them normally.
+    #[arg(long)]
+    crush_warn_only: bool,
+
+    /// Which missing-safety signals trigger a crush.
+    #[arg(long, value_enum, default_value_t = Threshold::All3)]
+    crush_threshold: Threshold,
+
+    /// Max simultaneous crush streams; further unsafe queries answer normally.
+    #[arg(long, default_value_t = 4)]
+    crush_concurrency: usize,
+
     #[command(subcommand)]
     cmd: Option<Cmd>,
+}
+
+#[derive(Copy, Clone, Debug, ValueEnum)]
+enum Threshold {
+    /// Crush on `SELECT *` / no column list.
+    Star,
+    /// Crush on a missing WHERE clause.
+    Where,
+    /// Crush on a missing LIMIT clause.
+    Limit,
+    /// Crush when any two signals are missing.
+    Any2,
+    /// Crush only when all three are missing (default).
+    All3,
+}
+
+impl From<Threshold> for CrushThreshold {
+    fn from(t: Threshold) -> Self {
+        match t {
+            Threshold::Star => CrushThreshold::Star,
+            Threshold::Where => CrushThreshold::Where,
+            Threshold::Limit => CrushThreshold::Limit,
+            Threshold::Any2 => CrushThreshold::Any2,
+            Threshold::All3 => CrushThreshold::All3,
+        }
+    }
 }
 
 #[derive(Subcommand)]
@@ -77,12 +125,30 @@ async fn main() -> std::io::Result<()> {
         seed: cli.seed,
         rows_min: cli.rows.0,
         rows_max: cli.rows.1,
+        crush: CrushConfig {
+            enabled: cli.crush,
+            max_rows: cli.crush_rows,
+            warn_only: cli.crush_warn_only,
+            threshold: cli.crush_threshold.into(),
+            concurrency: cli.crush_concurrency.max(1),
+        },
     });
 
     let listener = TcpListener::bind(&cli.pg).await?;
     info!("EtherealDB listening on {} (postgres protocol)", cli.pg);
     if let Some(seed) = cfg.seed {
         info!("deterministic mode, seed {seed}");
+    }
+    if cfg.crush.enabled {
+        if cfg.crush.warn_only {
+            info!("crush mode armed (warn-only): unsafe queries logged, not crushed");
+        } else {
+            warn!(
+                max_rows = cfg.crush.max_rows,
+                concurrency = cfg.crush.concurrency,
+                "CRUSH MODE ARMED — unsafe queries will be buried in rows"
+            );
+        }
     }
 
     server::serve(listener, cfg).await;

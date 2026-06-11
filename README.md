@@ -36,6 +36,7 @@ etherealdb                          # postgres protocol on 127.0.0.1:5432
 etherealdb --pg 0.0.0.0:5433        # different bind address
 etherealdb --seed 42                # deterministic: same query, same garbage
 etherealdb --rows 100:500           # row-count band when there's no LIMIT
+etherealdb --crush                  # crush mode (see below)
 etherealdb infer email user_id ...  # ask the inference engine directly
 ```
 
@@ -51,9 +52,39 @@ literal sense.
 - Literals echo back (`SELECT 1` returns `1`), casts steer wire types
   (`x::int`), `SHOW server_version` answers politely.
 - DML/DDL/transactions are cheerfully acknowledged and instantly forgotten.
+- **Crush mode** (`--crush`): unsafe queries trigger a streamed avalanche of
+  rows to overload careless clients. See below.
+
+## Crush mode
+
+`--crush` turns EtherealDB into a client stress-tester. A query that shows
+restraint — a specific column list, a `WHERE`, a `LIMIT` — gets a normal
+answer. A query that would dump a whole table in production (`SELECT * FROM x`
+with no `WHERE` and no `LIMIT`) springs the trap: a torrent of type-correct
+rows, streamed in chunks until the client's memory, buffer, or patience gives
+out. Point a BI tool or ORM at it and find out whether the client paginates
+like it should.
+
+```sh
+etherealdb --crush                       # arm it (default: all-three-signals → crush)
+etherealdb --crush --crush-rows 50000000 # how many rows an unsafe query earns
+etherealdb --crush --crush-warn-only     # log unsafe queries, but answer normally
+etherealdb --crush --crush-threshold any2  # crush when any two signals are missing
+etherealdb --crush --crush-concurrency 8  # cap simultaneous crush streams
+```
+
+```
+$ psql -h 127.0.0.1 -c 'select * from users'
+NOTICE:  CRUSH MODE: this query asked for everything — here it comes
+... 5,000,000 rows later ...
+```
+
+`count(*)`, `SELECT 1`, `SHOW`, DDL, and DML are always safe — crush only fires
+on table reads with no row budget. The server itself streams in O(1) memory; the
+client is on its own.
 
 See [PLAN.md](PLAN.md) for the roadmap: extended query protocol (ORMs),
-MySQL, Redis, chaos gremlins.
+MySQL, Redis.
 
 ## Development
 

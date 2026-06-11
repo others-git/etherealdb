@@ -39,6 +39,84 @@ pub struct ResultShape {
     pub columns: Vec<ColumnSpec>,
     pub table_hint: Option<String>,
     pub limit: Option<usize>,
+    /// The projection was `*` (or `t.*`) — the client chose no columns.
+    pub select_star: bool,
+    /// A top-level `WHERE` predicate is present on the base table.
+    pub has_where: bool,
+}
+
+impl ResultShape {
+    /// True when every projected column is an aggregate (`count(*)`, `sum(x)`),
+    /// which always yields exactly one row and is therefore never unsafe.
+    pub fn aggregate_only(&self) -> bool {
+        !self.columns.is_empty() && self.columns.iter().all(|c| c.aggregate)
+    }
+
+    /// Classify a query's crush risk against a threshold. Only table-backed,
+    /// non-aggregate SELECTs can be unsafe; everything else is `Safe`.
+    pub fn crush_class(&self, threshold: CrushThreshold) -> CrushClass {
+        if self.kind != StmtKind::Select || self.table_hint.is_none() || self.aggregate_only() {
+            return CrushClass::Safe;
+        }
+        let broad = self.select_star;
+        let no_where = !self.has_where;
+        let no_limit = self.limit.is_none();
+        let count = broad as u8 + no_where as u8 + no_limit as u8;
+
+        let triggered = match threshold {
+            CrushThreshold::Star => broad,
+            CrushThreshold::Where => no_where,
+            CrushThreshold::Limit => no_limit,
+            CrushThreshold::Any2 => count >= 2,
+            CrushThreshold::All3 => count == 3,
+        };
+        if triggered {
+            CrushClass::Crush { broad, no_where, no_limit }
+        } else if count >= 2 {
+            CrushClass::Warn { broad, no_where, no_limit }
+        } else {
+            CrushClass::Safe
+        }
+    }
+}
+
+/// Which combination of missing-safety signals trips crush mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CrushThreshold {
+    Star,
+    Where,
+    Limit,
+    Any2,
+    All3,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CrushClass {
+    Safe,
+    Warn { broad: bool, no_where: bool, no_limit: bool },
+    Crush { broad: bool, no_where: bool, no_limit: bool },
+}
+
+impl CrushClass {
+    /// A short, human-readable list of the signals that fired, for logs/notices.
+    pub fn reasons(&self) -> String {
+        let (broad, no_where, no_limit) = match self {
+            CrushClass::Safe => return String::new(),
+            CrushClass::Warn { broad, no_where, no_limit }
+            | CrushClass::Crush { broad, no_where, no_limit } => (*broad, *no_where, *no_limit),
+        };
+        let mut r = Vec::new();
+        if broad {
+            r.push("no column list");
+        }
+        if no_where {
+            r.push("no WHERE");
+        }
+        if no_limit {
+            r.push("no LIMIT");
+        }
+        r.join(", ")
+    }
 }
 
 /// Columns conjured for `SELECT *` — we have no schema, so every table
@@ -112,7 +190,14 @@ fn scan_words(s: &str) -> Vec<(String, usize, usize)> {
 pub fn extract(stmt: &str) -> ResultShape {
     let stmt = stmt.trim().trim_end_matches(';').trim();
     if stmt.is_empty() {
-        return ResultShape { kind: StmtKind::Empty, columns: vec![], table_hint: None, limit: None };
+        return ResultShape {
+            kind: StmtKind::Empty,
+            columns: vec![],
+            table_hint: None,
+            limit: None,
+            select_star: false,
+            has_where: false,
+        };
     }
     let words = scan_words(stmt);
     let first = words.first().map(|(w, _, _)| w.as_str()).unwrap_or("");
@@ -124,18 +209,24 @@ pub fn extract(stmt: &str) -> ResultShape {
             columns: vec![],
             table_hint: word_after(&words, stmt, "into"),
             limit: None,
+            select_star: false,
+            has_where: false,
         },
         "update" => ResultShape {
             kind: StmtKind::Update,
             columns: vec![],
             table_hint: word_after(&words, stmt, "update"),
             limit: None,
+            select_star: false,
+            has_where: false,
         },
         "delete" => ResultShape {
             kind: StmtKind::Delete,
             columns: vec![],
             table_hint: word_after(&words, stmt, "from"),
             limit: None,
+            select_star: false,
+            has_where: false,
         },
         "show" => {
             // SHOW x -> one column named x, one row. A couple of params get
@@ -157,6 +248,8 @@ pub fn extract(stmt: &str) -> ResultShape {
                 }],
                 table_hint: None,
                 limit: Some(1),
+                select_star: false,
+                has_where: false,
             }
         }
         _ => {
@@ -167,7 +260,14 @@ pub fn extract(stmt: &str) -> ResultShape {
                     tag = format!("{tag} {}", w.to_ascii_uppercase());
                 }
             }
-            ResultShape { kind: StmtKind::Command(tag), columns: vec![], table_hint: None, limit: None }
+            ResultShape {
+                kind: StmtKind::Command(tag),
+                columns: vec![],
+                table_hint: None,
+                limit: None,
+                select_star: false,
+                has_where: false,
+            }
         }
     }
 }
@@ -195,6 +295,8 @@ fn extract_select(stmt: &str, words: &[(String, usize, usize)]) -> ResultShape {
             columns: vec![],
             table_hint: None,
             limit: None,
+            select_star: false,
+            has_where: false,
         };
     };
 
@@ -218,7 +320,12 @@ fn extract_select(stmt: &str, words: &[(String, usize, usize)]) -> ResultShape {
     }
 
     let mut columns = Vec::new();
+    let mut select_star = false;
     for item in split_top_level(cols_text, ',') {
+        let trimmed = item.trim();
+        if trimmed == "*" || trimmed.ends_with(".*") {
+            select_star = true;
+        }
         parse_item(item, &mut columns);
     }
 
@@ -228,8 +335,11 @@ fn extract_select(stmt: &str, words: &[(String, usize, usize)]) -> ResultShape {
         .position(|(w, _, _)| w == "limit")
         .and_then(|i| words.get(i + 1))
         .and_then(|(w, _, _)| w.parse::<usize>().ok());
+    // `words` are top-level only, so a WHERE inside a subquery (which lives in
+    // parens) does not count as a predicate on the base table.
+    let has_where = words.iter().any(|(w, _, _)| w == "where");
 
-    ResultShape { kind: StmtKind::Select, columns, table_hint, limit }
+    ResultShape { kind: StmtKind::Select, columns, table_hint, limit, select_star, has_where }
 }
 
 fn parse_item(item: &str, out: &mut Vec<ColumnSpec>) {
@@ -444,5 +554,63 @@ mod tests {
         let s = extract("SHOW server_version");
         assert_eq!(s.columns[0].name, "server_version");
         assert!(s.columns[0].literal.as_ref().unwrap().0.contains("EtherealDB"));
+    }
+
+    fn is_crush(c: CrushClass) -> bool {
+        matches!(c, CrushClass::Crush { .. })
+    }
+    fn is_warn(c: CrushClass) -> bool {
+        matches!(c, CrushClass::Warn { .. })
+    }
+
+    #[test]
+    fn select_star_no_where_no_limit_is_crush() {
+        let s = extract("select * from users");
+        assert!(s.select_star && !s.has_where && s.limit.is_none());
+        assert!(is_crush(s.crush_class(CrushThreshold::All3)));
+    }
+
+    #[test]
+    fn restraint_disarms_the_trap() {
+        // explicit columns, a WHERE, and a LIMIT — all three present.
+        let s = extract("select id, email from users where id = 5 limit 10");
+        assert_eq!(s.crush_class(CrushThreshold::All3), CrushClass::Safe);
+        // any single act of restraint defuses all3, but two-missing still warns —
+        // even under the WHERE threshold, since a WHERE is present here.
+        let s = extract("select * from users where active");
+        assert!(is_warn(s.crush_class(CrushThreshold::All3)));
+        assert!(is_warn(s.crush_class(CrushThreshold::Where)));
+    }
+
+    #[test]
+    fn aggregates_and_tableless_are_always_safe() {
+        assert_eq!(extract("select count(*) from events").crush_class(CrushThreshold::All3), CrushClass::Safe);
+        assert_eq!(extract("select 1").crush_class(CrushThreshold::All3), CrushClass::Safe);
+        assert_eq!(extract("select now()").crush_class(CrushThreshold::Star), CrushClass::Safe);
+    }
+
+    #[test]
+    fn thresholds_tune_sensitivity() {
+        // missing only LIMIT (has columns + WHERE)
+        let s = extract("select id from logs where level = 'err'");
+        assert_eq!(s.crush_class(CrushThreshold::All3), CrushClass::Safe);
+        assert_eq!(s.crush_class(CrushThreshold::Any2), CrushClass::Safe);
+        assert!(is_crush(s.crush_class(CrushThreshold::Limit)));
+    }
+
+    #[test]
+    fn dml_never_crushes() {
+        assert_eq!(extract("delete from users").crush_class(CrushThreshold::Star), CrushClass::Safe);
+        assert_eq!(extract("update users set x = 1").crush_class(CrushThreshold::Star), CrushClass::Safe);
+    }
+
+    #[test]
+    fn subquery_where_does_not_count_as_predicate() {
+        let s = extract("select * from users where id in (select user_id from orders where total > 0)");
+        // top-level WHERE is present here, so it should be detected.
+        assert!(s.has_where);
+        // but a WHERE only inside the FROM subquery must not count:
+        let s2 = extract("select * from (select id from orders where total > 0) t");
+        assert!(!s2.has_where);
     }
 }
