@@ -6,13 +6,13 @@ WORKDIR /app
 ENV CARGO_NET_RETRY=10 CARGO_NET_GIT_FETCH_WITH_CLI=true
 
 # Fetch + compile dependencies first, against a dummy crate, so they cache in a
-# layer that source edits don't invalidate. cargo fetch retries on flaky pulls.
+# layer that source edits don't invalidate. cargo fetch retries on flaky pulls,
+# but it needs targets to resolve — so create the dummy sources first.
 COPY Cargo.toml Cargo.lock ./
+RUN mkdir src && echo 'fn main() {}' > src/main.rs && echo '' > src/lib.rs
 RUN cargo fetch
-RUN mkdir src && echo 'fn main() {}' > src/main.rs \
-    && echo '' > src/lib.rs \
-    && cargo build --release --offline --bin etherealdb 2>/dev/null || true \
-    && rm -rf src
+RUN cargo build --release --offline --bin etherealdb 2>/dev/null || true
+RUN rm -rf src
 
 COPY . .
 # Touch so cargo rebuilds with the real sources (deps already cached, offline).
