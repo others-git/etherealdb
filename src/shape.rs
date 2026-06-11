@@ -402,7 +402,7 @@ pub fn extract(stmt: &str) -> ResultShape {
                 .map(|(w, _, _)| w.clone())
                 .unwrap_or_else(|| "setting".into());
             let value = match param.as_str() {
-                "server_version" => "16.3 (EtherealDB 0.1.0)".to_string(),
+                "server_version" => "16.3 (EtherealDB 0.2.0)".to_string(),
                 "server_encoding" | "client_encoding" => "UTF8".to_string(),
                 "transaction_isolation" => "read committed".to_string(),
                 _ => "on".to_string(),
@@ -616,7 +616,7 @@ fn scalar_introspection(name: &str) -> Option<(&'static str, String, WireType)> 
     Some(match name {
         "version" => (
             "version",
-            v("PostgreSQL 16.3 (EtherealDB 0.1.0) on x86_64-pc-linux-gnu"),
+            v("PostgreSQL 16.3 (EtherealDB 0.2.0) on x86_64-pc-linux-gnu"),
             WireType::Text,
         ),
         "current_database" | "current_catalog" => {

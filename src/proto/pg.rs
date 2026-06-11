@@ -308,7 +308,7 @@ pub async fn handle(mut stream: TcpStream, shared: Arc<Shared>) -> std::io::Resu
     // --- auth (trust: everyone is welcome) + session parameters
     let mut buf = BytesMut::with_capacity(4096);
     put_msg(&mut buf, b'R', |b| b.put_i32(0)); // AuthenticationOk
-    put_parameter_status(&mut buf, "server_version", "16.3 (EtherealDB 0.1.0)");
+    put_parameter_status(&mut buf, "server_version", "16.3 (EtherealDB 0.2.0)");
     put_parameter_status(&mut buf, "server_encoding", "UTF8");
     put_parameter_status(&mut buf, "client_encoding", "UTF8");
     put_parameter_status(&mut buf, "DateStyle", "ISO, MDY");

@@ -9,15 +9,15 @@
 <p align="center">
   <a href="https://github.com/others-git/etherealdb/actions/workflows/ci.yml"><img src="https://github.com/others-git/etherealdb/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <img src="https://img.shields.io/badge/built%20with-Rust-dea584?logo=rust&logoColor=white" alt="Rust">
-  <img src="https://img.shields.io/badge/protocols-PostgreSQL%20%7C%20MySQL-a78bfa" alt="Protocols">
+  <img src="https://img.shields.io/badge/protocols-PostgreSQL%20%7C%20MySQL%20%7C%20Redis-a78bfa" alt="Protocols">
   <img src="https://img.shields.io/badge/license-MIT-7dd3fc" alt="License">
 </p>
 
-EtherealDB speaks the PostgreSQL (and MySQL) wire protocol, accepts **any**
-query, and returns random-but-plausible nonsense. Column values are chosen by a
-lightweight inference engine that guesses a column's semantic type from its
-name: `email` gets email addresses, `created_at` gets timestamps, `price`
-gets decimals, `is_active` gets booleans.
+EtherealDB speaks the PostgreSQL, MySQL, and Redis wire protocols, accepts
+**any** query, and returns random-but-plausible nonsense. Values are chosen by a
+lightweight inference engine that guesses a column's (or key's) semantic type
+from its name: `email` gets email addresses, `created_at` gets timestamps,
+`price` gets decimals, `is_active` gets booleans.
 
 No schema. No storage. No truth. Every database exists, every query succeeds.
 
@@ -91,6 +91,10 @@ literal sense.
 - DML/DDL/transactions are cheerfully acknowledged and instantly forgotten.
 - **Crush mode** (`--crush`): unsafe queries trigger a streamed avalanche of
   rows to overload careless clients. See below.
+- **Ghosts** (`--ghost-*`, `--fuzz`): inject latency, errors, dropped
+  connections, and pathological values to test client resilience. See below.
+- **Themes & custom rules** (`--theme`, `--rules`): domain-flavored values and
+  user-defined inference. See below.
 
 ## Crush mode
 
