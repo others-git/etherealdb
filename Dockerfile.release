@@ -1,0 +1,17 @@
+# Release image: assembles a tiny Alpine image from the prebuilt static musl
+# binaries produced by the `binary` job — no in-container (or emulated) compile.
+# buildx sets TARGETARCH (amd64/arm64) per platform; we copy the matching binary.
+FROM alpine:3.20
+ARG TARGETARCH
+LABEL org.opencontainers.image.title="EtherealDB" \
+      org.opencontainers.image.description="A database that isn't there: speaks real wire protocols, returns plausible nonsense." \
+      org.opencontainers.image.source="https://github.com/others-git/etherealdb"
+
+RUN adduser -D -u 10001 ethereal
+COPY docker/${TARGETARCH}/etherealdb /usr/local/bin/etherealdb
+RUN chmod +x /usr/local/bin/etherealdb
+
+USER ethereal
+EXPOSE 5432 3306
+ENTRYPOINT ["etherealdb"]
+CMD ["--pg", "0.0.0.0:5432", "--mysql", "0.0.0.0:3306"]
