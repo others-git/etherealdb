@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"
 description = "A database that isn't there: speaks real wire protocols, returns plausible nonsense."
 license = "MIT"
+repository = "https://github.com/others-git/etherealdb"
 
 [dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "net", "io-util", "macros", "signal", "sync"] }

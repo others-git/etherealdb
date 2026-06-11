@@ -7,11 +7,10 @@
 <p align="center"><em>A database that isn't there.</em></p>
 
 <p align="center">
+  <a href="https://github.com/others-git/etherealdb/actions/workflows/ci.yml"><img src="https://github.com/others-git/etherealdb/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <img src="https://img.shields.io/badge/built%20with-Rust-dea584?logo=rust&logoColor=white" alt="Rust">
   <img src="https://img.shields.io/badge/protocols-PostgreSQL%20%7C%20MySQL-a78bfa" alt="Protocols">
   <img src="https://img.shields.io/badge/license-MIT-7dd3fc" alt="License">
-  <!-- Once pushed to GitHub, swap OWNER/REPO below for a live CI badge:
-  <img src="https://github.com/OWNER/REPO/actions/workflows/ci.yml/badge.svg" alt="CI"> -->
 </p>
 
 EtherealDB speaks the PostgreSQL (and MySQL) wire protocol, accepts **any**
@@ -125,7 +124,8 @@ docker run --rm -p 5432:5432 -p 3306:3306 etherealdb
 docker run --rm -p 5432:5432 etherealdb --pg 0.0.0.0:5432 --seed 42 --crush
 ```
 
-Released images are published to GHCR on every tag (`ghcr.io/OWNER/REPO`).
+Released images are published to GHCR on every tag
+(`ghcr.io/others-git/etherealdb`).
 
 ## Development
 

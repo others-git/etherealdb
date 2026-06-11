@@ -19,7 +19,7 @@ RUN touch src/main.rs src/lib.rs \
 FROM alpine:3.20
 LABEL org.opencontainers.image.title="EtherealDB" \
       org.opencontainers.image.description="A database that isn't there: speaks real wire protocols, returns plausible nonsense." \
-      org.opencontainers.image.source="https://github.com/OWNER/REPO"
+      org.opencontainers.image.source="https://github.com/others-git/etherealdb"
 
 RUN adduser -D -u 10001 ethereal
 COPY --from=builder /app/target/release/etherealdb /usr/local/bin/etherealdb
