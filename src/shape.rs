@@ -2,7 +2,50 @@
 //! Not a SQL parser — a scanner that finds column names/aliases, the table
 //! hint, LIMIT, and the statement kind, while ignoring everything else.
 
-use crate::infer::{WireType, wire_type_from_sql};
+use crate::infer::{self, SemanticType, WireType, wire_type_from_sql};
+
+/// A column resolved to everything a protocol frontend needs to describe and
+/// fill it: its name, the value generator to use, its wire type, and an
+/// optional literal that overrides generation (echoed `SELECT 1`, `version()`).
+#[derive(Debug, Clone)]
+pub struct Resolved {
+    pub name: String,
+    pub st: SemanticType,
+    pub wt: WireType,
+    pub literal: Option<String>,
+}
+
+impl Resolved {
+    /// Resolve a parsed column spec: literals win, otherwise infer from the
+    /// name; an explicit `::cast` overrides the wire type (and the generator
+    /// when the name's flavor would contradict it).
+    pub fn from_spec(c: &ColumnSpec) -> Self {
+        if let Some((value, wt)) = &c.literal {
+            return Resolved {
+                name: c.name.clone(),
+                st: SemanticType::LoremShort,
+                wt: *wt,
+                literal: Some(value.clone()),
+            };
+        }
+        let mut st = infer::infer(&c.name);
+        let mut wt = infer::wire_type(st);
+        if let Some(cast) = c.cast {
+            if wt != cast {
+                st = infer::generic_for(cast);
+            }
+            wt = cast;
+        }
+        Resolved { name: c.name.clone(), st, wt, literal: None }
+    }
+
+    /// Resolve a bare column name (no cast/literal) — used for synthesised
+    /// schemas like the wide crush columns.
+    pub fn from_name(name: &str) -> Self {
+        let st = infer::infer(name);
+        Resolved { name: name.to_string(), st, wt: infer::wire_type(st), literal: None }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum StmtKind {

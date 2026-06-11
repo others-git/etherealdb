@@ -22,19 +22,36 @@ impl Shared {
     }
 }
 
-pub async fn serve(listener: TcpListener, cfg: Arc<Config>) {
-    let shared = Shared::new((*cfg).clone());
+/// Which wire protocol a listener speaks.
+#[derive(Clone, Copy, Debug)]
+pub enum Proto {
+    Postgres,
+    Mysql,
+}
+
+/// Accept loop: each connection is handled by the frontend for `proto`.
+pub async fn run(listener: TcpListener, shared: Arc<Shared>, proto: Proto) {
     loop {
         match listener.accept().await {
             Ok((sock, peer)) => {
                 let shared = shared.clone();
                 tokio::spawn(async move {
-                    if let Err(e) = proto::pg::handle(sock, shared).await {
-                        debug!(%peer, "connection ended: {e}");
+                    let res = match proto {
+                        Proto::Postgres => proto::pg::handle(sock, shared).await,
+                        Proto::Mysql => proto::mysql::handle(sock, shared).await,
+                    };
+                    if let Err(e) = res {
+                        debug!(%peer, ?proto, "connection ended: {e}");
                     }
                 });
             }
             Err(e) => warn!("accept failed: {e}"),
         }
     }
+}
+
+/// Convenience wrapper: serve a single Postgres listener (used by tests).
+pub async fn serve(listener: TcpListener, cfg: Arc<Config>) {
+    let shared = Shared::new((*cfg).clone());
+    run(listener, shared, Proto::Postgres).await;
 }

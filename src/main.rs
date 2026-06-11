@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use clap::{Parser, Subcommand, ValueEnum};
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
@@ -9,7 +7,7 @@ use tracing::{info, warn};
 use etherealdb::config::{Config, CrushConfig};
 use etherealdb::generate::generate;
 use etherealdb::infer::infer;
-use etherealdb::server;
+use etherealdb::server::{self, Proto, Shared};
 use etherealdb::shape::CrushThreshold;
 
 #[derive(Parser)]
@@ -18,6 +16,10 @@ struct Cli {
     /// Address for the Postgres-protocol listener.
     #[arg(long, default_value = "127.0.0.1:5432")]
     pg: String,
+
+    /// Also listen for the MySQL protocol on this address (off by default).
+    #[arg(long)]
+    mysql: Option<String>,
 
     /// Deterministic mode: the same query always returns the same garbage.
     #[arg(long)]
@@ -121,7 +123,7 @@ async fn main() -> std::io::Result<()> {
         )
         .init();
 
-    let cfg = Arc::new(Config {
+    let cfg = Config {
         seed: cli.seed,
         rows_min: cli.rows.0,
         rows_max: cli.rows.1,
@@ -132,10 +134,8 @@ async fn main() -> std::io::Result<()> {
             threshold: cli.crush_threshold.into(),
             concurrency: cli.crush_concurrency.max(1),
         },
-    });
+    };
 
-    let listener = TcpListener::bind(&cli.pg).await?;
-    info!("EtherealDB listening on {} (postgres protocol)", cli.pg);
     if let Some(seed) = cfg.seed {
         info!("deterministic mode, seed {seed}");
     }
@@ -151,6 +151,24 @@ async fn main() -> std::io::Result<()> {
         }
     }
 
-    server::serve(listener, cfg).await;
+    let shared = Shared::new(cfg);
+
+    let pg_listener = TcpListener::bind(&cli.pg).await?;
+    info!("EtherealDB listening on {} (postgres protocol)", cli.pg);
+    let pg = tokio::spawn(server::run(pg_listener, shared.clone(), Proto::Postgres));
+
+    let mysql = if let Some(addr) = &cli.mysql {
+        let l = TcpListener::bind(addr).await?;
+        info!("EtherealDB listening on {addr} (mysql protocol)");
+        Some(tokio::spawn(server::run(l, shared.clone(), Proto::Mysql)))
+    } else {
+        None
+    };
+
+    // Both accept loops run forever; surface a panic from either.
+    pg.await.ok();
+    if let Some(m) = mysql {
+        m.await.ok();
+    }
     Ok(())
 }

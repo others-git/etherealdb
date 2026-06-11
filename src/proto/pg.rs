@@ -16,9 +16,9 @@ use tracing::{debug, info, warn};
 
 use crate::config::{Config, fnv64};
 use crate::generate::generate;
-use crate::infer::{self, SemanticType, WireType};
+use crate::infer::WireType;
 use crate::server::Shared;
-use crate::shape::{self, ColumnSpec, CrushClass, ResultShape, StmtKind};
+use crate::shape::{self, CrushClass, Resolved, ResultShape, StmtKind};
 
 /// Rows flushed to the wire per write during a crush stream. Keeps server-side
 /// memory flat no matter how many rows we promise the client.
@@ -382,7 +382,7 @@ pub async fn handle(mut stream: TcpStream, shared: Arc<Shared>) -> std::io::Resu
                     });
                 }
                 if shape.kind == StmtKind::Select {
-                    let cols = binarize(shape.columns.iter().map(resolve_column).collect());
+                    let cols = binarize(shape.columns.iter().map(Resolved::from_spec).collect());
                     put_row_description(&mut out, &cols);
                 } else {
                     put_msg(&mut out, b'n', |_| {}); // NoData
@@ -430,14 +430,6 @@ pub async fn handle(mut stream: TcpStream, shared: Arc<Shared>) -> std::io::Resu
 struct Portal {
     sql: String,
     result_formats: Vec<i16>,
-}
-
-/// A column resolved to everything needed to describe and fill it on the wire.
-struct Resolved {
-    name: String,
-    st: SemanticType,
-    wt: WireType,
-    literal: Option<String>,
 }
 
 /// Build the RowDescription ('T') message for a set of resolved columns.
@@ -590,7 +582,7 @@ fn normal_response(out: &mut BytesMut, shape: &ResultShape, cfg: &Config, stmt: 
                 n = n.min(limit);
             }
 
-            let cols: Vec<Resolved> = shape.columns.iter().map(resolve_column).collect();
+            let cols: Vec<Resolved> = shape.columns.iter().map(Resolved::from_spec).collect();
             put_row_description(out, &cols);
             for _ in 0..n {
                 put_data_row(out, &cols, &mut rng);
@@ -633,7 +625,7 @@ async fn execute_portal(
     };
 
     if let StmtKind::Select = shape.kind {
-        let cols = binarize(shape.columns.iter().map(resolve_column).collect());
+        let cols = binarize(shape.columns.iter().map(Resolved::from_spec).collect());
 
         // Crush: stream the avalanche directly (no extra RowDescription).
         if matches!(class, CrushClass::Crush { .. }) && !cfg.crush.warn_only {
@@ -720,9 +712,9 @@ async fn crush_stream(
     // For `SELECT *` against an unknown table, synthesise a wide, diverse
     // schema; otherwise honour the columns the client actually asked for.
     let cols: Vec<Resolved> = if shape.select_star {
-        WIDE_CRUSH_COLUMNS.iter().map(|n| resolve_named(n)).collect()
+        WIDE_CRUSH_COLUMNS.iter().map(|n| Resolved::from_name(n)).collect()
     } else {
-        shape.columns.iter().map(resolve_column).collect()
+        shape.columns.iter().map(Resolved::from_spec).collect()
     };
 
     let mut header = BytesMut::with_capacity(256);
@@ -777,31 +769,3 @@ fn truncate(s: &str) -> String {
     format!("{}…", &s[..cut])
 }
 
-/// Resolve a bare column name (no cast/literal) — used for synthesised schemas.
-fn resolve_named(name: &str) -> Resolved {
-    let st = infer::infer(name);
-    Resolved { name: name.to_string(), st, wt: infer::wire_type(st), literal: None }
-}
-
-/// Resolve a column spec to everything needed to render it on the wire.
-fn resolve_column(c: &ColumnSpec) -> Resolved {
-    if let Some((value, wt)) = &c.literal {
-        return Resolved {
-            name: c.name.clone(),
-            st: SemanticType::LoremShort,
-            wt: *wt,
-            literal: Some(value.clone()),
-        };
-    }
-    let mut st = infer::infer(&c.name);
-    let mut wt = infer::wire_type(st);
-    if let Some(cast) = c.cast {
-        // The cast wins the wire type; keep the name's flavor only when it
-        // already agrees, otherwise generate a generic value of the cast type.
-        if wt != cast {
-            st = infer::generic_for(cast);
-        }
-        wt = cast;
-    }
-    Resolved { name: c.name.clone(), st, wt, literal: None }
-}

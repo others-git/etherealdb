@@ -34,17 +34,24 @@ standing up real data — and entertainment.
 ```sh
 etherealdb                          # postgres protocol on 127.0.0.1:5432
 etherealdb --pg 0.0.0.0:5433        # different bind address
+etherealdb --mysql 127.0.0.1:3306   # also speak MySQL (off by default)
 etherealdb --seed 42                # deterministic: same query, same garbage
 etherealdb --rows 100:500           # row-count band when there's no LIMIT
 etherealdb --crush                  # crush mode (see below)
 etherealdb infer email user_id ...  # ask the inference engine directly
 ```
 
+Run both protocols at once and connect with either `psql` or `mysql` — same
+fake data, same inference, same crush mode behind both.
+
 Any username works. Any database name works. Trust auth, in the most
 literal sense.
 
 ## What works (so far)
 
+- **MySQL** protocol (`--mysql`): handshake + trust auth, `COM_QUERY` text
+  result sets, so the `mysql` CLI and drivers connect. Crush mode and catalog
+  stubs work here too — the whole engine is shared with Postgres.
 - Postgres **simple** query protocol: `psql`, and any driver's `simple_query`
   path.
 - Postgres **extended** query protocol: Parse/Bind/Describe/Execute, so drivers
@@ -92,7 +99,7 @@ NOTICE:  CRUSH MODE: this query asked for everything — here it comes
 on table reads with no row budget. The server itself streams in O(1) memory; the
 client is on its own.
 
-See [PLAN.md](PLAN.md) for the roadmap: MySQL, themes, Redis.
+See [PLAN.md](PLAN.md) for the roadmap: themes, custom inference rules, Redis.
 
 ## Development
 
