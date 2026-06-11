@@ -1,0 +1,20 @@
+# EtherealDB custom inference rules — pass with `--rules examples/rules.example.txt`.
+#
+# One rule per line:  <kind>  <pattern>  <semantic-type>
+#   kind:  exact | suffix | prefix | token
+#   type:  any name from the semantic catalog (see README), e.g.
+#          short_code, money, bool, ip, email, timestamp, uuid, json, ...
+#
+# User rules are checked before the built-ins (so they win), with the usual
+# precedence: exact, then suffix, then prefix, then token. Names are normalized
+# (lowercased, camelCase -> snake_case) before matching. Blank lines and
+# everything after `#` are ignored.
+
+exact    coupon_code      short_code
+exact    tracking_no      short_code
+suffix   _balance         money
+suffix   _voucher         short_code
+prefix   flag_            bool
+prefix   is_enabled_      bool
+token    gateway          ip
+token    sku              short_code

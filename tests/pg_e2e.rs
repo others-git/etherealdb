@@ -4,7 +4,9 @@
 use std::sync::Arc;
 
 use etherealdb::config::{Config, CrushConfig};
+use etherealdb::infer::Rules;
 use etherealdb::server;
+use etherealdb::theme;
 use tokio_postgres::{NoTls, SimpleQueryMessage};
 
 async fn start_with(cfg: Config) -> u16 {
@@ -378,4 +380,51 @@ async fn catalog_query_is_not_crushed() {
         .await
         .unwrap();
     assert!(rows.is_empty(), "catalog query must be empty, not crushed");
+}
+
+// ---- Themes & custom inference rules ----
+
+#[tokio::test]
+async fn theme_changes_status_vocabulary() {
+    let cfg = Config {
+        theme: theme::by_name("ecommerce").unwrap(),
+        ..Config::default()
+    };
+    let port = start_with(cfg).await;
+    let client = connect(port).await;
+
+    let msgs = client
+        .simple_query("select status from orders limit 12")
+        .await
+        .unwrap();
+    let eco = theme::by_name("ecommerce").unwrap();
+    for r in rows(&msgs) {
+        let v = r.get(0).unwrap();
+        assert!(eco.statuses.contains(&v), "{v} is not an ecommerce status");
+    }
+}
+
+#[tokio::test]
+async fn custom_rules_override_inference() {
+    // Without rules, `coupon` is just lorem text; the rule makes it a short code.
+    let cfg = Config {
+        rules: Rules::parse("exact coupon short_code").unwrap(),
+        ..Config::default()
+    };
+    let port = start_with(cfg).await;
+    let client = connect(port).await;
+
+    let msgs = client
+        .simple_query("select coupon from cart limit 6")
+        .await
+        .unwrap();
+    for r in rows(&msgs) {
+        let v = r.get(0).unwrap();
+        assert_eq!(v.len(), 8, "short code should be 8 chars: {v}");
+        assert!(
+            v.chars()
+                .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit()),
+            "short code should be uppercase alnum: {v}"
+        );
+    }
 }

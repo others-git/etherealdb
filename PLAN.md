@@ -245,8 +245,8 @@ In crush mode, every unsafe query is logged at `WARN` level with:
 - **M4 — Crush mode**: streaming unsafe-query detection + client overload. ✅ (works in both simple and extended paths)
 - **M5 — GUI introspection stubs**: `version()`/`current_*` answer believably; `pg_catalog`/`information_schema` queries return empty result sets (never crushed) so DBeaver/TablePlus connect cleanly. ✅
 - **M6 — MySQL frontend**: handshake v10 + trust auth, `COM_QUERY` text result sets, crush + catalog stubs — all shared with Postgres via `ResultShape`. ✅
-- **M7 — Themes + custom rules**.
-- **M8 — Redis/RESP**.
+- **M7 — Themes + custom rules**: `--theme` swaps generator vocabularies (generic/ecommerce/finance/iot/users); `--rules` layers a no-deps rule file over the built-in inference. ✅
+- **M8 — Gremlins, fuzzing, performance tests
 
 ## 10. Key risks / unknowns
 

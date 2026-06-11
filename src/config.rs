@@ -1,4 +1,6 @@
+use crate::infer::Rules;
 use crate::shape::CrushThreshold;
+use crate::theme::{self, ThemeData};
 
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -8,6 +10,10 @@ pub struct Config {
     pub rows_min: usize,
     pub rows_max: usize,
     pub crush: CrushConfig,
+    /// Vocabulary pools the value generators draw from.
+    pub theme: &'static ThemeData,
+    /// User inference rules, layered over the built-ins.
+    pub rules: Rules,
 }
 
 #[derive(Debug, Clone)]
@@ -43,6 +49,8 @@ impl Default for Config {
             rows_min: 5,
             rows_max: 20,
             crush: CrushConfig::default(),
+            theme: &theme::GENERIC,
+            rules: Rules::default(),
         }
     }
 }

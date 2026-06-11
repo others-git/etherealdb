@@ -4,11 +4,14 @@ use rand_chacha::ChaCha8Rng;
 use tokio::net::TcpListener;
 use tracing::{info, warn};
 
+use std::path::PathBuf;
+
 use etherealdb::config::{Config, CrushConfig};
 use etherealdb::generate::generate;
-use etherealdb::infer::infer;
+use etherealdb::infer::{Rules, infer_with};
 use etherealdb::server::{self, Proto, Shared};
 use etherealdb::shape::CrushThreshold;
+use etherealdb::theme::{self, ThemeData};
 
 #[derive(Parser)]
 #[command(name = "etherealdb", version, about = "A database that isn't there.")]
@@ -22,12 +25,20 @@ struct Cli {
     mysql: Option<String>,
 
     /// Deterministic mode: the same query always returns the same garbage.
-    #[arg(long)]
+    #[arg(long, global = true)]
     seed: Option<u64>,
 
     /// Row-count band for queries without a LIMIT, as min:max.
     #[arg(long, default_value = "5:20", value_parser = parse_band)]
     rows: (usize, usize),
+
+    /// Vocabulary theme for generated values (generic, ecommerce, finance, iot, users).
+    #[arg(long, default_value = "generic", value_parser = parse_theme, global = true)]
+    theme: &'static ThemeData,
+
+    /// File of custom inference rules, layered over the built-ins.
+    #[arg(long, global = true)]
+    rules: Option<PathBuf>,
 
     /// Crush mode: bury clients that send unsafe queries (no columns / WHERE /
     /// LIMIT) under a torrent of type-correct rows.
@@ -99,18 +110,40 @@ fn parse_band(s: &str) -> Result<(usize, usize), String> {
     Ok((lo, hi))
 }
 
+fn parse_theme(s: &str) -> Result<&'static ThemeData, String> {
+    theme::by_name(s)
+        .ok_or_else(|| format!("unknown theme `{s}` (try: {})", theme::names().join(", ")))
+}
+
+/// Load custom inference rules from a file, exiting with a clear message on error.
+fn load_rules(path: Option<&PathBuf>) -> Rules {
+    let Some(path) = path else {
+        return Rules::default();
+    };
+    let text = std::fs::read_to_string(path).unwrap_or_else(|e| {
+        eprintln!("etherealdb: cannot read rules file {}: {e}", path.display());
+        std::process::exit(2);
+    });
+    Rules::parse(&text).unwrap_or_else(|e| {
+        eprintln!("etherealdb: invalid rules file {}: {e}", path.display());
+        std::process::exit(2);
+    })
+}
+
 #[tokio::main]
 async fn main() -> std::io::Result<()> {
     let cli = Cli::parse();
 
-    if let Some(Cmd::Infer { names }) = cli.cmd {
+    if let Some(Cmd::Infer { names }) = &cli.cmd {
+        let rules = load_rules(cli.rules.as_ref());
+        let theme = cli.theme;
         let mut rng = match cli.seed {
             Some(s) => ChaCha8Rng::seed_from_u64(s),
             None => ChaCha8Rng::from_os_rng(),
         };
         for name in names {
-            let st = infer(&name);
-            let samples: Vec<String> = (0..3).map(|_| generate(st, &mut rng)).collect();
+            let st = infer_with(name, &rules);
+            let samples: Vec<String> = (0..3).map(|_| generate(st, &mut rng, theme)).collect();
             println!(
                 "{name:<24} {:<14} {}",
                 format!("{st:?}"),
@@ -127,6 +160,7 @@ async fn main() -> std::io::Result<()> {
         )
         .init();
 
+    let rules = load_rules(cli.rules.as_ref());
     let cfg = Config {
         seed: cli.seed,
         rows_min: cli.rows.0,
@@ -138,10 +172,18 @@ async fn main() -> std::io::Result<()> {
             threshold: cli.crush_threshold.into(),
             concurrency: cli.crush_concurrency.max(1),
         },
+        theme: cli.theme,
+        rules,
     };
 
     if let Some(seed) = cfg.seed {
         info!("deterministic mode, seed {seed}");
+    }
+    if cfg.theme.name != "generic" {
+        info!("theme: {}", cfg.theme.name);
+    }
+    if !cfg.rules.is_empty() {
+        info!("loaded {} custom inference rule(s)", cfg.rules.len());
     }
     if cfg.crush.enabled {
         if cfg.crush.warn_only {

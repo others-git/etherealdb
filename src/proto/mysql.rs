@@ -22,6 +22,7 @@ use crate::generate::generate;
 use crate::infer::WireType;
 use crate::server::Shared;
 use crate::shape::{self, CrushClass, Resolved, ResultShape, StmtKind};
+use crate::theme::ThemeData;
 
 // --- capability flags (server advertises a useful subset) ---
 const CLIENT_LONG_PASSWORD: u32 = 0x0000_0001;
@@ -101,11 +102,11 @@ fn mysql_type(wt: WireType) -> u8 {
 
 /// Render a generated value in MySQL's expected text form. Only booleans differ
 /// from the Postgres text we generate: MySQL wants `1`/`0`, not `t`/`f`.
-fn mysql_value(c: &Resolved, rng: &mut impl Rng) -> String {
+fn mysql_value(c: &Resolved, rng: &mut impl Rng, theme: &ThemeData) -> String {
     if let Some(lit) = &c.literal {
         return lit.clone();
     }
-    let v = generate(c.st, rng);
+    let v = generate(c.st, rng, theme);
     if c.wt == WireType::Bool {
         if v == "t" { "1".into() } else { "0".into() }
     } else {
@@ -222,10 +223,10 @@ fn column_def(c: &Resolved) -> BytesMut {
     b
 }
 
-fn text_row(cols: &[Resolved], rng: &mut impl Rng) -> BytesMut {
+fn text_row(cols: &[Resolved], rng: &mut impl Rng, theme: &ThemeData) -> BytesMut {
     let mut b = BytesMut::new();
     for c in cols {
-        put_lenenc_str(&mut b, &mysql_value(c, rng));
+        put_lenenc_str(&mut b, &mysql_value(c, rng, theme));
     }
     b
 }
@@ -395,10 +396,10 @@ async fn select_response(
             let cols: Vec<Resolved> = if shape.select_star {
                 WIDE_CRUSH_COLUMNS
                     .iter()
-                    .map(|n| Resolved::from_name(n))
+                    .map(|n| Resolved::from_name(n, &cfg.rules))
                     .collect()
             } else {
-                shape.columns.iter().map(Resolved::from_spec).collect()
+                resolve_cols(shape, cfg)
             };
             warn!(%peer, reasons = class.reasons(), "CRUSH (mysql)");
             return crush_stream(conn, &cols, cfg, sql, peer).await;
@@ -408,7 +409,7 @@ async fn select_response(
     }
 
     // Normal result set.
-    let cols: Vec<Resolved> = shape.columns.iter().map(Resolved::from_spec).collect();
+    let cols = resolve_cols(shape, cfg);
     let mut rng = seed_rng(cfg, sql);
     let mut n = if shape.force_empty {
         0
@@ -423,10 +424,19 @@ async fn select_response(
 
     send_result_header(conn, &cols).await?;
     for _ in 0..n {
-        let row = text_row(&cols, &mut rng);
+        let row = text_row(&cols, &mut rng, cfg.theme);
         conn.write_packet(&row).await?;
     }
     conn.write_packet(&eof_packet()).await
+}
+
+/// Resolve a select's columns through the inference engine + user rules.
+fn resolve_cols(shape: &ResultShape, cfg: &Config) -> Vec<Resolved> {
+    shape
+        .columns
+        .iter()
+        .map(|c| Resolved::from_spec(c, &cfg.rules))
+        .collect()
 }
 
 /// Column-count packet, the column definitions, and the terminating EOF.
@@ -457,7 +467,7 @@ async fn crush_stream(
     while sent < max {
         let this = CRUSH_CHUNK.min(max - sent);
         for _ in 0..this {
-            let row = text_row(cols, &mut rng);
+            let row = text_row(cols, &mut rng, cfg.theme);
             if let Err(e) = conn.write_packet(&row).await {
                 warn!(%peer, rows = sent, "crush aborted: client gave up");
                 return Err(e);

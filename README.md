@@ -48,6 +48,8 @@ etherealdb --pg 0.0.0.0:5433        # different bind address
 etherealdb --mysql 127.0.0.1:3306   # also speak MySQL (off by default)
 etherealdb --seed 42                # deterministic: same query, same garbage
 etherealdb --rows 100:500           # row-count band when there's no LIMIT
+etherealdb --theme ecommerce        # domain-flavored values (see below)
+etherealdb --rules my-rules.txt     # custom inference rules (see below)
 etherealdb --crush                  # crush mode (see below)
 etherealdb infer email user_id ...  # ask the inference engine directly
 ```
@@ -111,6 +113,34 @@ on table reads with no row budget. The server itself streams in O(1) memory; the
 client is on its own.
 
 See [PLAN.md](PLAN.md) for the roadmap: themes, custom inference rules, Redis.
+
+## Themes & custom rules
+
+**`--theme`** swaps the vocabulary the generators draw from, so values feel like
+they belong to a domain. Built-ins: `generic` (default), `ecommerce`, `finance`,
+`iot`, `users`. A `status` column reads `active`/`archived` under `generic` but
+`shipped`/`refunded` under `ecommerce`; `type`/`kind` columns and free text shift
+to match too.
+
+```
+$ etherealdb infer status order_type --theme ecommerce
+status       StatusEnum   shipped | refunded | pending
+order_type   KindEnum     physical | giftcard | digital
+```
+
+**`--rules <file>`** layers your own name→type rules over the built-in inference
+engine (yours win). The format is one rule per line — `<kind> <pattern> <type>`,
+where kind is `exact`/`suffix`/`prefix`/`token` — no config language to learn:
+
+```text
+exact   coupon_code   short_code
+suffix  _balance      money
+prefix  flag_         bool
+token   gateway       ip
+```
+
+See [`examples/rules.example.txt`](examples/rules.example.txt). Both flags work
+on the live server and on the `infer` debug subcommand.
 
 ## Docker
 

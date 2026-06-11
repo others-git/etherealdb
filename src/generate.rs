@@ -5,6 +5,7 @@ use rand::Rng;
 use rand::seq::IndexedRandom;
 
 use crate::infer::SemanticType;
+use crate::theme::ThemeData;
 
 static FIRST_NAMES: &[&str] = &[
     "Alice", "Marcus", "Yuki", "Priya", "Omar", "Ingrid", "Chen", "Fatima", "Diego", "Astrid",
@@ -174,23 +175,7 @@ static COLORS: &[&str] = &[
     "rust",
 ];
 
-static STATUSES: &[&str] = &[
-    "active",
-    "pending",
-    "inactive",
-    "archived",
-    "suspended",
-    "expired",
-];
-
-static KINDS: &[&str] = &[
-    "standard",
-    "premium",
-    "basic",
-    "trial",
-    "enterprise",
-    "legacy",
-];
+// status/kind vocabularies live in the active theme (see `theme.rs`).
 
 static DOMAINS: &[&str] = &[
     "lumenforge.io",
@@ -248,6 +233,16 @@ fn word(rng: &mut impl Rng) -> &'static str {
     WORDS.choose(rng).unwrap()
 }
 
+/// A word for "content" fields (lorem, slugs, JSON): roughly half the time a
+/// noun from the active theme, otherwise a neutral filler word.
+fn themed_word(rng: &mut impl Rng, theme: &ThemeData) -> &'static str {
+    if !theme.nouns.is_empty() && rng.random_bool(0.45) {
+        theme.nouns.choose(rng).unwrap()
+    } else {
+        word(rng)
+    }
+}
+
 /// Civil-from-days (Howard Hinnant's algorithm): days since 1970-01-01 -> (y, m, d).
 fn civil_from_days(z: i64) -> (i64, u32, u32) {
     let z = z + 719468;
@@ -297,7 +292,7 @@ fn fmt_timestamp(epoch: i64) -> String {
     format!("{} {}", fmt_date(epoch), fmt_time(epoch))
 }
 
-pub fn generate(st: SemanticType, rng: &mut impl Rng) -> String {
+pub fn generate(st: SemanticType, rng: &mut impl Rng, theme: &ThemeData) -> String {
     use SemanticType::*;
     match st {
         IdInt => rng.random_range(1..1_000_000i64).to_string(),
@@ -362,9 +357,14 @@ pub fn generate(st: SemanticType, rng: &mut impl Rng) -> String {
         HexColor => format!("#{:06x}", rng.random_range(0..0x1000000u32)),
         Lat => format!("{:.6}", rng.random_range(-90.0..90.0)),
         Lng => format!("{:.6}", rng.random_range(-180.0..180.0)),
-        StatusEnum => pick(rng, STATUSES).to_string(),
-        KindEnum => pick(rng, KINDS).to_string(),
-        Slug => format!("{}-{}-{}", word(rng), word(rng), word(rng)),
+        StatusEnum => theme.statuses.choose(rng).unwrap().to_string(),
+        KindEnum => theme.kinds.choose(rng).unwrap().to_string(),
+        Slug => format!(
+            "{}-{}-{}",
+            themed_word(rng, theme),
+            themed_word(rng, theme),
+            rng.random_range(100..9999)
+        ),
         PasswordHash => {
             const CS: &[u8] = b"./ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
             let tail: String = (0..53)
@@ -374,14 +374,17 @@ pub fn generate(st: SemanticType, rng: &mut impl Rng) -> String {
         }
         Json => format!(
             r#"{{"{}": "{}", "count": {}, "active": {}}}"#,
-            word(rng),
-            word(rng),
+            themed_word(rng, theme),
+            themed_word(rng, theme),
             rng.random_range(0..100),
             rng.random_bool(0.5)
         ),
         LoremShort => {
             let n = rng.random_range(2..=4);
-            let mut s = (0..n).map(|_| word(rng)).collect::<Vec<_>>().join(" ");
+            let mut s = (0..n)
+                .map(|_| themed_word(rng, theme))
+                .collect::<Vec<_>>()
+                .join(" ");
             if let Some(c) = s.get_mut(0..1) {
                 c.make_ascii_uppercase();
             }
@@ -389,7 +392,10 @@ pub fn generate(st: SemanticType, rng: &mut impl Rng) -> String {
         }
         LoremLong => {
             let n = rng.random_range(8..=16);
-            let mut s = (0..n).map(|_| word(rng)).collect::<Vec<_>>().join(" ");
+            let mut s = (0..n)
+                .map(|_| themed_word(rng, theme))
+                .collect::<Vec<_>>()
+                .join(" ");
             if let Some(c) = s.get_mut(0..1) {
                 c.make_ascii_uppercase();
             }
@@ -426,13 +432,14 @@ pub fn generate(st: SemanticType, rng: &mut impl Rng) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::theme::{self, GENERIC};
     use rand::SeedableRng;
     use rand_chacha::ChaCha8Rng;
 
     #[test]
     fn email_looks_like_email() {
         let mut rng = ChaCha8Rng::seed_from_u64(1);
-        let v = generate(SemanticType::Email, &mut rng);
+        let v = generate(SemanticType::Email, &mut rng, &GENERIC);
         assert!(v.contains('@') && v.contains('.'));
     }
 
@@ -446,27 +453,44 @@ mod tests {
             SemanticType::Money,
             SemanticType::IdUuid,
         ] {
-            assert_eq!(generate(st, &mut a), generate(st, &mut b));
+            assert_eq!(
+                generate(st, &mut a, &GENERIC),
+                generate(st, &mut b, &GENERIC)
+            );
         }
     }
 
     #[test]
     fn date_formats() {
         let mut rng = ChaCha8Rng::seed_from_u64(7);
-        let ts = generate(SemanticType::Timestamp, &mut rng);
+        let ts = generate(SemanticType::Timestamp, &mut rng, &GENERIC);
         // "YYYY-MM-DD HH:MM:SS"
         assert_eq!(ts.len(), 19, "bad timestamp: {ts}");
         assert_eq!(&ts[4..5], "-");
         assert_eq!(&ts[10..11], " ");
-        let d = generate(SemanticType::Date, &mut rng);
+        let d = generate(SemanticType::Date, &mut rng, &GENERIC);
         assert_eq!(d.len(), 10, "bad date: {d}");
     }
 
     #[test]
     fn bool_is_pg_text_format() {
         let mut rng = ChaCha8Rng::seed_from_u64(3);
-        let v = generate(SemanticType::Bool, &mut rng);
+        let v = generate(SemanticType::Bool, &mut rng, &GENERIC);
         assert!(v == "t" || v == "f");
+    }
+
+    #[test]
+    fn theme_changes_status_vocabulary() {
+        // Under the ecommerce theme, statuses come from its pool.
+        let mut rng = ChaCha8Rng::seed_from_u64(11);
+        let eco = theme::by_name("ecommerce").unwrap();
+        for _ in 0..20 {
+            let v = generate(SemanticType::StatusEnum, &mut rng, eco);
+            assert!(
+                eco.statuses.contains(&v.as_str()),
+                "{v} not an ecommerce status"
+            );
+        }
     }
 
     #[test]

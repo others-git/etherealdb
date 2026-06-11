@@ -2,7 +2,7 @@
 //! Not a SQL parser — a scanner that finds column names/aliases, the table
 //! hint, LIMIT, and the statement kind, while ignoring everything else.
 
-use crate::infer::{self, SemanticType, WireType, wire_type_from_sql};
+use crate::infer::{self, Rules, SemanticType, WireType, wire_type_from_sql};
 
 /// A column resolved to everything a protocol frontend needs to describe and
 /// fill it: its name, the value generator to use, its wire type, and an
@@ -17,9 +17,9 @@ pub struct Resolved {
 
 impl Resolved {
     /// Resolve a parsed column spec: literals win, otherwise infer from the
-    /// name; an explicit `::cast` overrides the wire type (and the generator
-    /// when the name's flavor would contradict it).
-    pub fn from_spec(c: &ColumnSpec) -> Self {
+    /// name (user rules first); an explicit `::cast` overrides the wire type
+    /// (and the generator when the name's flavor would contradict it).
+    pub fn from_spec(c: &ColumnSpec, rules: &Rules) -> Self {
         if let Some((value, wt)) = &c.literal {
             return Resolved {
                 name: c.name.clone(),
@@ -28,7 +28,7 @@ impl Resolved {
                 literal: Some(value.clone()),
             };
         }
-        let mut st = infer::infer(&c.name);
+        let mut st = infer::infer_with(&c.name, rules);
         let mut wt = infer::wire_type(st);
         if let Some(cast) = c.cast {
             if wt != cast {
@@ -46,8 +46,8 @@ impl Resolved {
 
     /// Resolve a bare column name (no cast/literal) — used for synthesised
     /// schemas like the wide crush columns.
-    pub fn from_name(name: &str) -> Self {
-        let st = infer::infer(name);
+    pub fn from_name(name: &str, rules: &Rules) -> Self {
+        let st = infer::infer_with(name, rules);
         Resolved {
             name: name.to_string(),
             st,
@@ -234,7 +234,7 @@ static STAR_COLUMNS: &[&str] = &["id", "name", "email", "status", "created_at"];
 /// common `column = $n` shape we run the column name through the inference
 /// engine — so `where id = $1` reports int4 and `where email = $2` reports
 /// text. Unrecognised params default to text. Returns a Vec indexed by `n-1`.
-pub fn param_types(sql: &str) -> Vec<WireType> {
+pub fn param_types(sql: &str, rules: &Rules) -> Vec<WireType> {
     let bytes = sql.as_bytes();
     let mut found: Vec<(usize, WireType)> = Vec::new();
     let mut i = 0;
@@ -248,7 +248,7 @@ pub fn param_types(sql: &str) -> Vec<WireType> {
             }
             if num >= 1 {
                 let wt = nearby_column(sql, i)
-                    .map(|name| crate::infer::wire_type(crate::infer::infer(&name)))
+                    .map(|name| infer::wire_type(infer::infer_with(&name, rules)))
                     .unwrap_or(WireType::Text);
                 found.push((num, wt));
             }
@@ -936,17 +936,18 @@ mod tests {
 
     #[test]
     fn param_types_from_context() {
-        let t = param_types("select * from users where id = $1 and email = $2");
+        let r = Rules::default();
+        let t = param_types("select * from users where id = $1 and email = $2", &r);
         assert_eq!(t, vec![WireType::Int8, WireType::Text]);
         // out-of-order indices still land in the right slots
-        let t = param_types("select * from t where created_at > $2 or id = $1");
+        let t = param_types("select * from t where created_at > $2 or id = $1", &r);
         assert_eq!(t.len(), 2);
         assert_eq!(t[0], WireType::Int8); // $1 = id
         assert_eq!(t[1], WireType::Timestamp); // $2 = created_at
         // no params
-        assert!(param_types("select 1").is_empty());
+        assert!(param_types("select 1", &r).is_empty());
         // unrecognised context -> text
-        assert_eq!(param_types("select $1"), vec![WireType::Text]);
+        assert_eq!(param_types("select $1", &r), vec![WireType::Text]);
     }
 
     #[test]

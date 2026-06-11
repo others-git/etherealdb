@@ -19,6 +19,7 @@ use crate::generate::generate;
 use crate::infer::WireType;
 use crate::server::Shared;
 use crate::shape::{self, CrushClass, Resolved, ResultShape, StmtKind};
+use crate::theme::ThemeData;
 
 /// Rows flushed to the wire per write during a crush stream. Keeps server-side
 /// memory flat no matter how many rows we promise the client.
@@ -393,7 +394,7 @@ pub async fn handle(mut stream: TcpStream, shared: Arc<Shared>) -> std::io::Resu
                 let shape = shape::extract(&sql);
                 if kind == b'S' {
                     // ParameterDescription
-                    let params = shape::param_types(&sql);
+                    let params = shape::param_types(&sql, &shared.cfg.rules);
                     put_msg(&mut out, b't', |b| {
                         b.put_i16(params.len() as i16);
                         for wt in &params {
@@ -402,7 +403,7 @@ pub async fn handle(mut stream: TcpStream, shared: Arc<Shared>) -> std::io::Resu
                     });
                 }
                 if shape.kind == StmtKind::Select {
-                    let cols = binarize(shape.columns.iter().map(Resolved::from_spec).collect());
+                    let cols = binarize(resolve_cols(&shape, &shared.cfg));
                     put_row_description(&mut out, &cols);
                 } else {
                     put_msg(&mut out, b'n', |_| {}); // NoData
@@ -469,8 +470,8 @@ fn put_row_description(out: &mut BytesMut, cols: &[Resolved]) {
 }
 
 /// Append one DataRow ('D') of freshly generated values, in text format.
-fn put_data_row(out: &mut BytesMut, cols: &[Resolved], rng: &mut impl Rng) {
-    put_data_row_fmt(out, cols, rng, &[]);
+fn put_data_row(out: &mut BytesMut, cols: &[Resolved], rng: &mut impl Rng, theme: &ThemeData) {
+    put_data_row_fmt(out, cols, rng, &[], theme);
 }
 
 /// The result format for column `i` given Bind's format codes: empty = all
@@ -484,13 +485,19 @@ fn format_for(formats: &[i16], i: usize) -> i16 {
 }
 
 /// Append one DataRow honoring per-column result format codes (0 text, 1 binary).
-fn put_data_row_fmt(out: &mut BytesMut, cols: &[Resolved], rng: &mut impl Rng, formats: &[i16]) {
+fn put_data_row_fmt(
+    out: &mut BytesMut,
+    cols: &[Resolved],
+    rng: &mut impl Rng,
+    formats: &[i16],
+    theme: &ThemeData,
+) {
     put_msg(out, b'D', |b| {
         b.put_i16(cols.len() as i16);
         for (i, c) in cols.iter().enumerate() {
             let text = match &c.literal {
                 Some(v) => v.clone(),
-                None => generate(c.st, rng),
+                None => generate(c.st, rng, theme),
             };
             if format_for(formats, i) == 1 {
                 let bin = text_to_binary(c.wt, &text);
@@ -614,10 +621,10 @@ fn normal_response(out: &mut BytesMut, shape: &ResultShape, cfg: &Config, stmt: 
                 n = n.min(limit);
             }
 
-            let cols: Vec<Resolved> = shape.columns.iter().map(Resolved::from_spec).collect();
+            let cols = resolve_cols(shape, cfg);
             put_row_description(out, &cols);
             for _ in 0..n {
-                put_data_row(out, &cols, &mut rng);
+                put_data_row(out, &cols, &mut rng, cfg.theme);
             }
             put_command_complete(out, &format!("SELECT {n}"));
         }
@@ -657,7 +664,7 @@ async fn execute_portal(
     };
 
     if let StmtKind::Select = shape.kind {
-        let cols = binarize(shape.columns.iter().map(Resolved::from_spec).collect());
+        let cols = binarize(resolve_cols(&shape, cfg));
 
         // Crush: stream the avalanche directly (no extra RowDescription).
         if matches!(class, CrushClass::Crush { .. }) && !cfg.crush.warn_only {
@@ -671,7 +678,9 @@ async fn execute_portal(
                 put_notice(&mut notice, CRUSH_NOTICE);
                 stream.write_all(&notice).await?;
                 let rng = seed_rng(cfg, sql);
-                return match stream_rows(stream, &cols, formats, cfg.crush.max_rows, rng).await {
+                return match stream_rows(stream, &cols, formats, cfg.crush.max_rows, rng, cfg.theme)
+                    .await
+                {
                     Ok(n) => {
                         info!(%peer, rows = n, "crush complete");
                         Ok(())
@@ -721,7 +730,7 @@ async fn execute_portal(
             n = n.min(max_rows as usize);
         }
         for _ in 0..n {
-            put_data_row_fmt(out, &cols, &mut rng, formats);
+            put_data_row_fmt(out, &cols, &mut rng, formats, cfg.theme);
         }
         put_command_complete(out, &format!("SELECT {n}"));
         return Ok(());
@@ -761,10 +770,10 @@ async fn crush_stream(
     let cols: Vec<Resolved> = if shape.select_star {
         WIDE_CRUSH_COLUMNS
             .iter()
-            .map(|n| Resolved::from_name(n))
+            .map(|n| Resolved::from_name(n, &cfg.rules))
             .collect()
     } else {
-        shape.columns.iter().map(Resolved::from_spec).collect()
+        resolve_cols(shape, cfg)
     };
 
     let mut header = BytesMut::with_capacity(256);
@@ -774,10 +783,19 @@ async fn crush_stream(
         return Err((0, e));
     }
     let rng = seed_rng(cfg, stmt);
-    stream_rows(stream, &cols, &[], cfg.crush.max_rows, rng).await
+    stream_rows(stream, &cols, &[], cfg.crush.max_rows, rng, cfg.theme).await
 }
 
 const CRUSH_NOTICE: &str = "CRUSH MODE: this query asked for everything — here it comes";
+
+/// Resolve a select's columns through the inference engine + user rules.
+fn resolve_cols(shape: &ResultShape, cfg: &Config) -> Vec<Resolved> {
+    shape
+        .columns
+        .iter()
+        .map(|c| Resolved::from_spec(c, &cfg.rules))
+        .collect()
+}
 
 /// Stream up to `max` DataRows in 1000-row chunks, then a CommandComplete.
 /// O(1) memory: one chunk buffer, reused. Format codes select text/binary.
@@ -788,6 +806,7 @@ async fn stream_rows(
     formats: &[i16],
     max: u64,
     mut rng: ChaCha8Rng,
+    theme: &ThemeData,
 ) -> Result<u64, (u64, std::io::Error)> {
     let mut sent: u64 = 0;
     let mut chunk = BytesMut::with_capacity(64 * 1024);
@@ -795,7 +814,7 @@ async fn stream_rows(
         let this = CRUSH_CHUNK.min(max - sent);
         chunk.clear();
         for _ in 0..this {
-            put_data_row_fmt(&mut chunk, cols, &mut rng, formats);
+            put_data_row_fmt(&mut chunk, cols, &mut rng, formats, theme);
         }
         if let Err(e) = stream.write_all(&chunk).await {
             return Err((sent, e));

@@ -435,6 +435,176 @@ pub fn infer(name: &str) -> SemanticType {
     LoremShort
 }
 
+/// Resolve a name through user rules first, falling back to the built-ins.
+pub fn infer_with(name: &str, rules: &Rules) -> SemanticType {
+    rules.infer(name).unwrap_or_else(|| infer(name))
+}
+
+/// Parse a semantic-type name (as used in a `--rules` file) into the enum.
+/// Accepts the catalog's snake_case names plus a few friendly aliases.
+pub fn semantic_from_str(s: &str) -> Option<SemanticType> {
+    Some(match s.to_ascii_lowercase().as_str() {
+        "id_int" | "id" => IdInt,
+        "id_uuid" | "uuid" | "guid" => IdUuid,
+        "fk_int" | "fk" => FkInt,
+        "bool" | "boolean" => Bool,
+        "int_small" | "int" | "integer" => IntSmall,
+        "int_big" | "bigint" | "long" => IntBig,
+        "float" | "double" => Float,
+        "money" | "decimal" | "currency_amount" => Money,
+        "percent" | "percentage" => Percent,
+        "timestamp" | "datetime" => Timestamp,
+        "date" => Date,
+        "time" => Time,
+        "email" => Email,
+        "phone" => Phone,
+        "url" | "uri" => Url,
+        "ip" | "ip_address" => Ip,
+        "first_name" => FirstName,
+        "last_name" => LastName,
+        "full_name" | "name" => FullName,
+        "username" | "handle" => Username,
+        "company" => Company,
+        "city" => City,
+        "country" => Country,
+        "country_code" => CountryCode,
+        "street_address" | "address" => StreetAddress,
+        "zipcode" | "zip" => Zipcode,
+        "color" | "colour" => Color,
+        "hex_color" => HexColor,
+        "lat" | "latitude" => Lat,
+        "lng" | "longitude" => Lng,
+        "status_enum" | "status" => StatusEnum,
+        "kind_enum" | "kind" | "type" => KindEnum,
+        "slug" => Slug,
+        "password_hash" | "hash" | "password" => PasswordHash,
+        "json" | "jsonb" => Json,
+        "lorem_short" | "text" | "lorem" => LoremShort,
+        "lorem_long" | "paragraph" => LoremLong,
+        "currency_code" => CurrencyCode,
+        "language_code" | "locale" => LanguageCode,
+        "mime_type" => MimeType,
+        "user_agent" => UserAgent,
+        "credit_card" => CreditCard,
+        "file_size" => FileSize,
+        "short_code" | "code" => ShortCode,
+        "version" => Version,
+        _ => return None,
+    })
+}
+
+/// How a rule pattern is matched against a (normalized) column name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MatchKind {
+    Exact,
+    Suffix,
+    Prefix,
+    Token,
+}
+
+#[derive(Debug, Clone)]
+struct Rule {
+    kind: MatchKind,
+    pat: String,
+    st: SemanticType,
+}
+
+/// User-supplied inference rules, layered over the built-ins. Loaded from a
+/// simple line-oriented file (no dependencies):
+///
+/// ```text
+/// # kind   pattern        type
+/// exact    coupon_code    short_code
+/// suffix   _balance       money
+/// prefix   flag_          bool
+/// token    gateway        ip
+/// ```
+#[derive(Debug, Clone, Default)]
+pub struct Rules {
+    rules: Vec<Rule>,
+}
+
+impl Rules {
+    pub fn is_empty(&self) -> bool {
+        self.rules.is_empty()
+    }
+
+    pub fn len(&self) -> usize {
+        self.rules.len()
+    }
+
+    /// Parse rules from text, reporting the 1-based line number on error.
+    pub fn parse(text: &str) -> Result<Rules, String> {
+        let mut rules = Vec::new();
+        for (i, raw) in text.lines().enumerate() {
+            let line = raw.split('#').next().unwrap_or("").trim();
+            if line.is_empty() {
+                continue;
+            }
+            let mut f = line.split_whitespace();
+            let (Some(kind), Some(pat), Some(ty)) = (f.next(), f.next(), f.next()) else {
+                return Err(format!(
+                    "line {}: expected `<kind> <pattern> <type>`",
+                    i + 1
+                ));
+            };
+            if f.next().is_some() {
+                return Err(format!("line {}: too many fields", i + 1));
+            }
+            let kind = match kind.to_ascii_lowercase().as_str() {
+                "exact" => MatchKind::Exact,
+                "suffix" => MatchKind::Suffix,
+                "prefix" => MatchKind::Prefix,
+                "token" => MatchKind::Token,
+                other => {
+                    return Err(format!(
+                        "line {}: unknown match kind `{other}` (exact|suffix|prefix|token)",
+                        i + 1
+                    ));
+                }
+            };
+            let st = semantic_from_str(ty)
+                .ok_or_else(|| format!("line {}: unknown semantic type `{ty}`", i + 1))?;
+            rules.push(Rule {
+                kind,
+                pat: normalize(pat),
+                st,
+            });
+        }
+        Ok(Rules { rules })
+    }
+
+    /// Resolve a name through the user rules. Built-in precedence is preserved
+    /// (exact, then suffix, then prefix, then token); within a kind, file order.
+    pub fn infer(&self, name: &str) -> Option<SemanticType> {
+        if self.rules.is_empty() {
+            return None;
+        }
+        let n = normalize(name.trim().trim_matches('"'));
+        let squashed: String = n.chars().filter(|c| *c != '_').collect();
+        let tokens: Vec<&str> = n.split(['_', '.', ' ']).filter(|t| !t.is_empty()).collect();
+        for kind in [
+            MatchKind::Exact,
+            MatchKind::Suffix,
+            MatchKind::Prefix,
+            MatchKind::Token,
+        ] {
+            for r in self.rules.iter().filter(|r| r.kind == kind) {
+                let hit = match kind {
+                    MatchKind::Exact => n == r.pat || squashed == r.pat,
+                    MatchKind::Suffix => n.ends_with(&r.pat),
+                    MatchKind::Prefix => n.starts_with(&r.pat),
+                    MatchKind::Token => tokens.iter().any(|t| *t == r.pat),
+                };
+                if hit {
+                    return Some(r.st);
+                }
+            }
+        }
+        None
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -486,5 +656,48 @@ mod tests {
         assert_eq!(infer("name"), FullName);
         assert_eq!(infer("first_name"), FirstName);
         assert_eq!(infer("last_name"), LastName);
+    }
+
+    #[test]
+    fn rules_parse_and_apply() {
+        let rules = Rules::parse(
+            "# custom rules\n\
+             exact   coupon_code   short_code\n\
+             suffix  _balance      money\n\
+             prefix  flag_         bool\n\
+             token   gateway       ip\n",
+        )
+        .unwrap();
+        assert_eq!(rules.len(), 4);
+        assert_eq!(rules.infer("coupon_code"), Some(ShortCode));
+        assert_eq!(rules.infer("wallet_balance"), Some(Money));
+        assert_eq!(rules.infer("flag_enabled"), Some(Bool));
+        assert_eq!(rules.infer("primary_gateway_host"), Some(Ip));
+        assert_eq!(rules.infer("unrelated"), None);
+    }
+
+    #[test]
+    fn rules_win_over_builtins() {
+        // built-in: "status" -> StatusEnum; override it to short_code.
+        let rules = Rules::parse("exact status short_code").unwrap();
+        assert_eq!(infer("status"), StatusEnum);
+        assert_eq!(infer_with("status", &rules), ShortCode);
+        // names the rules don't cover still fall through to built-ins.
+        assert_eq!(infer_with("email", &rules), Email);
+    }
+
+    #[test]
+    fn rules_normalize_camel_case() {
+        let rules = Rules::parse("suffix _token password_hash").unwrap();
+        assert_eq!(rules.infer("apiToken"), Some(PasswordHash)); // camel -> api_token
+    }
+
+    #[test]
+    fn rules_reject_bad_input() {
+        assert!(Rules::parse("nope foo bar").is_err()); // unknown kind
+        assert!(Rules::parse("exact foo not_a_type").is_err()); // unknown type
+        assert!(Rules::parse("exact foo").is_err()); // too few fields
+        // comments and blank lines are fine
+        assert!(Rules::parse("\n  # just a comment\n\n").unwrap().is_empty());
     }
 }
