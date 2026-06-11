@@ -45,8 +45,13 @@ literal sense.
 
 ## What works (so far)
 
-- Postgres simple query protocol: `psql`, and any driver's `simple_query`
+- Postgres **simple** query protocol: `psql`, and any driver's `simple_query`
   path.
+- Postgres **extended** query protocol: Parse/Bind/Describe/Execute, so drivers
+  and ORMs using `client.query(...)` / prepared statements connect. Results are
+  encoded in **binary** when the client asks (int/bool/float/text/json/uuid/
+  date/time/timestamp). Parameter types are inferred from context — `where id =
+  $1` reports an int param, `where email = $2` a text one.
 - `SELECT` anything — columns are inferred by name, `SELECT *` conjures a
   default schema, `LIMIT` is honored, `count(*)` returns one row.
 - Literals echo back (`SELECT 1` returns `1`), casts steer wire types
@@ -83,8 +88,8 @@ NOTICE:  CRUSH MODE: this query asked for everything — here it comes
 on table reads with no row budget. The server itself streams in O(1) memory; the
 client is on its own.
 
-See [PLAN.md](PLAN.md) for the roadmap: extended query protocol (ORMs),
-MySQL, Redis.
+See [PLAN.md](PLAN.md) for the roadmap: GUI-client introspection stubs
+(DBeaver/TablePlus), MySQL, Redis.
 
 ## Development
 

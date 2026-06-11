@@ -123,6 +123,73 @@ impl CrushClass {
 /// conveniently has these.
 static STAR_COLUMNS: &[&str] = &["id", "name", "email", "status", "created_at"];
 
+/// Best-effort parameter types for an extended-protocol prepared statement.
+/// We can't truly infer types (we don't understand the query), but for the
+/// common `column = $n` shape we run the column name through the inference
+/// engine — so `where id = $1` reports int4 and `where email = $2` reports
+/// text. Unrecognised params default to text. Returns a Vec indexed by `n-1`.
+pub fn param_types(sql: &str) -> Vec<WireType> {
+    let bytes = sql.as_bytes();
+    let mut found: Vec<(usize, WireType)> = Vec::new();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'$' && bytes.get(i + 1).is_some_and(u8::is_ascii_digit) {
+            let mut j = i + 1;
+            let mut num = 0usize;
+            while j < bytes.len() && bytes[j].is_ascii_digit() {
+                num = num * 10 + (bytes[j] - b'0') as usize;
+                j += 1;
+            }
+            if num >= 1 {
+                let wt = nearby_column(sql, i)
+                    .map(|name| crate::infer::wire_type(crate::infer::infer(&name)))
+                    .unwrap_or(WireType::Text);
+                found.push((num, wt));
+            }
+            i = j;
+        } else {
+            i += 1;
+        }
+    }
+    let max = found.iter().map(|(n, _)| *n).max().unwrap_or(0);
+    let mut out = vec![WireType::Text; max];
+    for (n, wt) in found {
+        out[n - 1] = wt;
+    }
+    out
+}
+
+/// The identifier adjacent to a `$n` placeholder at byte offset `dollar`,
+/// looking left past one comparison operator (`col = $1`) and otherwise right
+/// (`$1 = col`).
+fn nearby_column(sql: &str, dollar: usize) -> Option<String> {
+    let b = sql.as_bytes();
+    // look left: skip spaces, then a run of operator chars, then spaces
+    let mut k = dollar;
+    let is_op = |c: u8| matches!(c, b'=' | b'<' | b'>' | b'!' | b'~' | b'+' | b'-' | b'*' | b'/');
+    while k > 0 && b[k - 1].is_ascii_whitespace() {
+        k -= 1;
+    }
+    let had_op = k > 0 && is_op(b[k - 1]);
+    while k > 0 && is_op(b[k - 1]) {
+        k -= 1;
+    }
+    while k > 0 && b[k - 1].is_ascii_whitespace() {
+        k -= 1;
+    }
+    if had_op {
+        let end = k;
+        while k > 0 && (b[k - 1].is_ascii_alphanumeric() || b[k - 1] == b'_' || b[k - 1] == b'.') {
+            k -= 1;
+        }
+        if k < end {
+            let raw = &sql[k..end];
+            return Some(raw.rsplit('.').next().unwrap_or(raw).to_string());
+        }
+    }
+    None
+}
+
 /// Split a query buffer into statements on top-level semicolons.
 pub fn split_statements(sql: &str) -> Vec<&str> {
     split_top_level(sql, ';')
@@ -602,6 +669,21 @@ mod tests {
     fn dml_never_crushes() {
         assert_eq!(extract("delete from users").crush_class(CrushThreshold::Star), CrushClass::Safe);
         assert_eq!(extract("update users set x = 1").crush_class(CrushThreshold::Star), CrushClass::Safe);
+    }
+
+    #[test]
+    fn param_types_from_context() {
+        let t = param_types("select * from users where id = $1 and email = $2");
+        assert_eq!(t, vec![WireType::Int8, WireType::Text]);
+        // out-of-order indices still land in the right slots
+        let t = param_types("select * from t where created_at > $2 or id = $1");
+        assert_eq!(t.len(), 2);
+        assert_eq!(t[0], WireType::Int8); // $1 = id
+        assert_eq!(t[1], WireType::Timestamp); // $2 = created_at
+        // no params
+        assert!(param_types("select 1").is_empty());
+        // unrecognised context -> text
+        assert_eq!(param_types("select $1"), vec![WireType::Text]);
     }
 
     #[test]

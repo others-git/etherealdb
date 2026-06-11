@@ -113,6 +113,19 @@ fn civil_from_days(z: i64) -> (i64, u32, u32) {
     (y + (m <= 2) as i64, m, d)
 }
 
+/// Inverse of `civil_from_days` (Howard Hinnant): (y, m, d) -> days since the
+/// Unix epoch. Used to re-encode our text dates into Postgres binary format.
+pub fn days_from_civil(y: i64, m: u32, d: u32) -> i64 {
+    let y = if m <= 2 { y - 1 } else { y };
+    let era = (if y >= 0 { y } else { y - 399 }) / 400;
+    let yoe = (y - era * 400) as i64; // [0, 399]
+    let m = m as i64;
+    let d = d as i64;
+    let doy = (153 * (if m > 2 { m - 3 } else { m + 9 }) + 2) / 5 + d - 1; // [0, 365]
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy; // [0, 146096]
+    era * 146097 + doe - 719468
+}
+
 /// Roughly "now" (mid-2026); fake timestamps land within ~2 years before this.
 const NOW_EPOCH: i64 = 1_781_049_600;
 const TWO_YEARS: i64 = 63_113_904;
@@ -306,5 +319,15 @@ mod tests {
         // 2024-02-29 12:00:00 UTC (leap day) = 1709208000
         assert_eq!(fmt_timestamp(1_709_208_000), "2024-02-29 12:00:00");
         assert_eq!(fmt_date(0), "1970-01-01");
+    }
+
+    #[test]
+    fn days_from_civil_roundtrips() {
+        assert_eq!(days_from_civil(1970, 1, 1), 0);
+        assert_eq!(days_from_civil(2000, 1, 1), 10957); // Postgres epoch
+        for &days in &[0i64, 10957, 20000, -3650, 19783] {
+            let (y, m, d) = civil_from_days(days);
+            assert_eq!(days_from_civil(y, m, d), days, "roundtrip failed at {days}");
+        }
     }
 }

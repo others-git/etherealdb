@@ -189,3 +189,87 @@ async fn warn_only_does_not_crush() {
     let msgs = client.simple_query("select * from users").await.unwrap();
     assert!(rows(&msgs).len() <= 20, "warn-only must answer normally");
 }
+
+// ---- Extended query protocol (client.query / prepared statements) ----
+
+#[tokio::test]
+async fn extended_query_typed_binary_decode() {
+    let port = start_server(Some(123)).await;
+    let client = connect(port).await;
+
+    // client.query uses the extended protocol with binary result formats; the
+    // values must decode into their native Rust types.
+    let rows = client
+        .query(
+            "select id, email, is_active, created_at, price from accounts limit 6",
+            &[],
+        )
+        .await
+        .unwrap();
+    assert!(!rows.is_empty() && rows.len() <= 6);
+
+    for row in &rows {
+        let _id: i64 = row.get(0);
+        let email: &str = row.get(1);
+        let _active: bool = row.get(2);
+        let _created: std::time::SystemTime = row.get(3);
+        let price: f64 = row.get(4); // numeric is advertised as float8
+        assert!(email.contains('@'));
+        assert!(price >= 0.0);
+    }
+}
+
+#[tokio::test]
+async fn extended_handles_int_and_uuid_and_date() {
+    let port = start_server(Some(5)).await;
+    let client = connect(port).await;
+
+    let rows = client
+        .query("select user_id, account_uuid, signup_date from members limit 4", &[])
+        .await
+        .unwrap();
+    assert!(!rows.is_empty());
+    for row in &rows {
+        let _fk: i64 = row.get(0);
+        let _uuid: uuid::Uuid = row.get(1);
+        let _date: chrono::NaiveDate = row.get(2);
+    }
+}
+
+#[tokio::test]
+async fn prepared_statement_with_param() {
+    let port = start_server(Some(77)).await;
+    let client = connect(port).await;
+
+    // `id = $1` — the inference engine reports the param as int8 (it's an `id`),
+    // so binding an i64 type-checks against ParameterDescription.
+    let stmt = client
+        .prepare("select id, email from users where id = $1 limit 3")
+        .await
+        .unwrap();
+    assert_eq!(stmt.params(), &[tokio_postgres::types::Type::INT8]);
+    let rows = client.query(&stmt, &[&42i64]).await.unwrap();
+    assert!(!rows.is_empty() && rows.len() <= 3);
+    let _id: i64 = rows[0].get(0);
+}
+
+#[tokio::test]
+async fn extended_select_literal() {
+    let port = start_server(None).await;
+    let client = connect(port).await;
+
+    let row = client.query_one("select 1 as n", &[]).await.unwrap();
+    let n: i32 = row.get(0);
+    assert_eq!(n, 1);
+}
+
+#[tokio::test]
+async fn extended_crush_streams_many_rows() {
+    let port = start_with(crush_config(15_000)).await;
+    let client = connect(port).await;
+
+    // Unsafe query over the extended protocol still triggers the avalanche.
+    let rows = client.query("select * from users", &[]).await.unwrap();
+    assert_eq!(rows.len(), 15_000);
+    let _id: i64 = rows[0].get(0);
+}

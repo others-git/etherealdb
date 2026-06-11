@@ -16,7 +16,9 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 uuid = { version = "1", features = ["v4"] }
 
 [dev-dependencies]
-tokio-postgres = "0.7"
+tokio-postgres = { version = "0.7", features = ["with-uuid-1", "with-chrono-0_4"] }
+uuid = { version = "1", features = ["v4"] }
+chrono = "0.4"
 
 [profile.release]
 lto = true

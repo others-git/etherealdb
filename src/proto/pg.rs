@@ -4,6 +4,7 @@
 //! auth, simple query ('Q'), Terminate ('X'). Extended-protocol messages get
 //! a polite ErrorResponse so drivers fail loudly instead of hanging.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use bytes::{BufMut, BytesMut};
@@ -52,6 +53,122 @@ fn oid(wt: WireType) -> u32 {
     }
 }
 
+/// Microseconds between the Unix epoch (1970) and the Postgres epoch (2000).
+const PG_EPOCH_OFFSET_SECS: i64 = 946_684_800;
+/// Days between the two epochs.
+const PG_EPOCH_OFFSET_DAYS: i64 = 10957;
+
+/// Re-encode a generated text value into the Postgres *binary* wire format for
+/// its type. We generate canonical text, so parsing it back is exact; on any
+/// unexpected input we fall back to a zero of the right width.
+fn text_to_binary(wt: WireType, text: &str) -> Vec<u8> {
+    match wt {
+        WireType::Bool => vec![(text == "t" || text == "true") as u8],
+        WireType::Int4 => text.parse::<i32>().unwrap_or(0).to_be_bytes().to_vec(),
+        WireType::Int8 => text.parse::<i64>().unwrap_or(0).to_be_bytes().to_vec(),
+        // Numeric is remapped to float8 for the binary path (see `binarize`).
+        WireType::Float8 | WireType::Numeric => {
+            text.parse::<f64>().unwrap_or(0.0).to_be_bytes().to_vec()
+        }
+        WireType::Text | WireType::Json => text.as_bytes().to_vec(),
+        WireType::Uuid => {
+            let mut out = Vec::with_capacity(16);
+            let hex: Vec<u8> = text.bytes().filter(u8::is_ascii_hexdigit).collect();
+            for pair in hex.chunks(2).take(16) {
+                let hi = (pair[0] as char).to_digit(16).unwrap_or(0);
+                let lo = pair.get(1).map_or(0, |c| (*c as char).to_digit(16).unwrap_or(0));
+                out.push((hi * 16 + lo) as u8);
+            }
+            out.resize(16, 0);
+            out
+        }
+        WireType::Date => {
+            let days = parse_ymd(text).map(|(y, m, d)| {
+                crate::generate::days_from_civil(y, m, d) - PG_EPOCH_OFFSET_DAYS
+            });
+            (days.unwrap_or(0) as i32).to_be_bytes().to_vec()
+        }
+        WireType::Time => {
+            let micros = parse_hms(text).map(|(h, m, s)| (h * 3600 + m * 60 + s) * 1_000_000);
+            micros.unwrap_or(0).to_be_bytes().to_vec()
+        }
+        WireType::Timestamp => {
+            let micros = parse_timestamp(text).unwrap_or(0);
+            micros.to_be_bytes().to_vec()
+        }
+    }
+}
+
+fn parse_ymd(s: &str) -> Option<(i64, u32, u32)> {
+    let mut it = s.split('-');
+    let y = it.next()?.parse().ok()?;
+    let m = it.next()?.parse().ok()?;
+    let d = it.next()?.parse().ok()?;
+    Some((y, m, d))
+}
+
+fn parse_hms(s: &str) -> Option<(i64, i64, i64)> {
+    let mut it = s.split(':');
+    let h = it.next()?.parse().ok()?;
+    let m = it.next()?.parse().ok()?;
+    let sec = it.next()?.parse().ok()?;
+    Some((h, m, sec))
+}
+
+/// "YYYY-MM-DD HH:MM:SS" -> microseconds since the Postgres epoch (2000-01-01).
+fn parse_timestamp(s: &str) -> Option<i64> {
+    let (date, time) = s.split_once(' ')?;
+    let (y, m, d) = parse_ymd(date)?;
+    let (h, mi, se) = parse_hms(time)?;
+    let days = crate::generate::days_from_civil(y, m, d);
+    let secs = days * 86400 + h * 3600 + mi * 60 + se - PG_EPOCH_OFFSET_SECS;
+    Some(secs * 1_000_000)
+}
+
+/// A cursor over a message payload with bounds-checked, saturating reads —
+/// malformed input yields defaults rather than panicking.
+struct Reader<'a> {
+    b: &'a [u8],
+    pos: usize,
+}
+
+impl<'a> Reader<'a> {
+    fn new(b: &'a [u8]) -> Self {
+        Self { b, pos: 0 }
+    }
+    fn u8(&mut self) -> u8 {
+        let v = self.b.get(self.pos).copied().unwrap_or(0);
+        self.pos += 1;
+        v
+    }
+    fn i16(&mut self) -> i16 {
+        let mut a = [0u8; 2];
+        for x in &mut a {
+            *x = self.u8();
+        }
+        i16::from_be_bytes(a)
+    }
+    fn i32(&mut self) -> i32 {
+        let mut a = [0u8; 4];
+        for x in &mut a {
+            *x = self.u8();
+        }
+        i32::from_be_bytes(a)
+    }
+    /// Read a NUL-terminated string.
+    fn cstr(&mut self) -> String {
+        let start = self.pos.min(self.b.len());
+        let end = self.b[start..].iter().position(|&c| c == 0).map_or(self.b.len(), |i| start + i);
+        let s = String::from_utf8_lossy(&self.b[start..end]).into_owned();
+        self.pos = (end + 1).min(self.b.len() + 1);
+        s
+    }
+    /// Skip `n` bytes.
+    fn skip(&mut self, n: usize) {
+        self.pos = self.pos.saturating_add(n);
+    }
+}
+
 fn put_msg(buf: &mut BytesMut, tag: u8, body: impl FnOnce(&mut BytesMut)) {
     buf.put_u8(tag);
     let len_pos = buf.len();
@@ -77,6 +194,7 @@ fn put_ready(buf: &mut BytesMut) {
     put_msg(buf, b'Z', |b| b.put_u8(b'I'));
 }
 
+#[allow(dead_code)] // a protocol primitive we keep on hand for future use
 fn put_error(buf: &mut BytesMut, code: &str, msg: &str) {
     put_msg(buf, b'E', |b| {
         b.put_u8(b'S');
@@ -174,6 +292,11 @@ pub async fn handle(mut stream: TcpStream, shared: Arc<Shared>) -> std::io::Resu
     stream.write_all(&buf).await?;
 
     // --- command phase
+    // Extended-protocol state: prepared statements (name -> SQL) and bound
+    // portals. The unnamed statement/portal use the empty-string key.
+    let mut statements: HashMap<String, String> = HashMap::new();
+    let mut portals: HashMap<String, Portal> = HashMap::new();
+
     loop {
         let tag = match stream.read_u8().await {
             Ok(t) => t,
@@ -188,6 +311,7 @@ pub async fn handle(mut stream: TcpStream, shared: Arc<Shared>) -> std::io::Resu
 
         let mut out = BytesMut::with_capacity(8192);
         match tag {
+            // --- simple query
             b'Q' => {
                 let sql =
                     String::from_utf8_lossy(payload.strip_suffix(&[0]).unwrap_or(&payload)).into_owned();
@@ -202,17 +326,94 @@ pub async fn handle(mut stream: TcpStream, shared: Arc<Shared>) -> std::io::Resu
                 }
                 put_ready(&mut out);
             }
-            b'X' => return Ok(()),
+
+            // --- extended query: Parse
             b'P' => {
-                // extended query protocol: refuse clearly, then sync below
-                put_error(
-                    &mut out,
-                    "0A000",
-                    "EtherealDB speaks the simple query protocol only (so far); try psql, or simple_query in your driver",
-                );
+                let mut r = Reader::new(&payload);
+                let name = r.cstr();
+                let query = r.cstr();
+                statements.insert(name, query);
+                put_msg(&mut out, b'1', |_| {}); // ParseComplete
             }
+
+            // --- extended query: Bind
+            b'B' => {
+                let mut r = Reader::new(&payload);
+                let portal = r.cstr();
+                let stmt_name = r.cstr();
+                let n_param_formats = r.i16().max(0) as usize;
+                for _ in 0..n_param_formats {
+                    r.i16();
+                }
+                let n_params = r.i16().max(0) as usize;
+                for _ in 0..n_params {
+                    let plen = r.i32();
+                    if plen > 0 {
+                        r.skip(plen as usize); // we never read parameter values
+                    }
+                }
+                let n_result_formats = r.i16().max(0) as usize;
+                let result_formats: Vec<i16> = (0..n_result_formats).map(|_| r.i16()).collect();
+                let sql = statements.get(&stmt_name).cloned().unwrap_or_default();
+                portals.insert(portal, Portal { sql, result_formats });
+                put_msg(&mut out, b'2', |_| {}); // BindComplete
+            }
+
+            // --- extended query: Describe
+            b'D' => {
+                let mut r = Reader::new(&payload);
+                let kind = r.u8();
+                let name = r.cstr();
+                let sql = if kind == b'S' {
+                    statements.get(&name).cloned()
+                } else {
+                    portals.get(&name).map(|p| p.sql.clone())
+                };
+                let sql = sql.unwrap_or_default();
+                let shape = shape::extract(&sql);
+                if kind == b'S' {
+                    // ParameterDescription
+                    let params = shape::param_types(&sql);
+                    put_msg(&mut out, b't', |b| {
+                        b.put_i16(params.len() as i16);
+                        for wt in &params {
+                            b.put_u32(oid(*wt));
+                        }
+                    });
+                }
+                if shape.kind == StmtKind::Select {
+                    let cols = binarize(shape.columns.iter().map(resolve_column).collect());
+                    put_row_description(&mut out, &cols);
+                } else {
+                    put_msg(&mut out, b'n', |_| {}); // NoData
+                }
+            }
+
+            // --- extended query: Execute
+            b'E' => {
+                let mut r = Reader::new(&payload);
+                let portal = r.cstr();
+                let max_rows = r.i32();
+                let portal = portals.get(&portal).cloned().unwrap_or_default();
+                execute_portal(&mut stream, &mut out, &portal, max_rows, &shared, peer).await?;
+            }
+
+            // --- extended query: Close
+            b'C' => {
+                let mut r = Reader::new(&payload);
+                let kind = r.u8();
+                let name = r.cstr();
+                if kind == b'S' {
+                    statements.remove(&name);
+                } else {
+                    portals.remove(&name);
+                }
+                put_msg(&mut out, b'3', |_| {}); // CloseComplete
+            }
+
+            b'X' => return Ok(()),       // Terminate
             b'S' => put_ready(&mut out), // Sync
-            b'H' => {}                   // Flush
+            b'H' => {}                   // Flush — out is flushed below regardless
             _ => {
                 debug!(%peer, tag = (tag as char).to_string(), "ignoring message");
             }
@@ -221,6 +422,14 @@ pub async fn handle(mut stream: TcpStream, shared: Arc<Shared>) -> std::io::Resu
             stream.write_all(&out).await?;
         }
     }
+}
+
+/// A bound portal: the SQL it came from plus the result format codes the client
+/// requested in Bind (empty = all text, len 1 = uniform, else per-column).
+#[derive(Clone, Default)]
+struct Portal {
+    sql: String,
+    result_formats: Vec<i16>,
 }
 
 /// A column resolved to everything needed to describe and fill it on the wire.
@@ -247,19 +456,52 @@ fn put_row_description(out: &mut BytesMut, cols: &[Resolved]) {
     });
 }
 
-/// Append one DataRow ('D') filled with freshly generated values.
+/// Append one DataRow ('D') of freshly generated values, in text format.
 fn put_data_row(out: &mut BytesMut, cols: &[Resolved], rng: &mut impl Rng) {
+    put_data_row_fmt(out, cols, rng, &[]);
+}
+
+/// The result format for column `i` given Bind's format codes: empty = all
+/// text, length 1 = that code for every column, otherwise per-column.
+fn format_for(formats: &[i16], i: usize) -> i16 {
+    match formats.len() {
+        0 => 0,
+        1 => formats[0],
+        _ => formats.get(i).copied().unwrap_or(0),
+    }
+}
+
+/// Append one DataRow honoring per-column result format codes (0 text, 1 binary).
+fn put_data_row_fmt(out: &mut BytesMut, cols: &[Resolved], rng: &mut impl Rng, formats: &[i16]) {
     put_msg(out, b'D', |b| {
         b.put_i16(cols.len() as i16);
-        for c in cols {
-            let v = match &c.literal {
+        for (i, c) in cols.iter().enumerate() {
+            let text = match &c.literal {
                 Some(v) => v.clone(),
                 None => generate(c.st, rng),
             };
-            b.put_i32(v.len() as i32);
-            b.put_slice(v.as_bytes());
+            if format_for(formats, i) == 1 {
+                let bin = text_to_binary(c.wt, &text);
+                b.put_i32(bin.len() as i32);
+                b.put_slice(&bin);
+            } else {
+                b.put_i32(text.len() as i32);
+                b.put_slice(text.as_bytes());
+            }
         }
     });
+}
+
+/// Remap columns for the extended/binary path: Postgres binary `numeric` uses a
+/// fiddly base-10000 encoding, so we advertise and encode money/percent columns
+/// as float8 instead — close enough for a database that isn't there.
+fn binarize(mut cols: Vec<Resolved>) -> Vec<Resolved> {
+    for c in &mut cols {
+        if c.wt == WireType::Numeric {
+            c.wt = WireType::Float8;
+        }
+    }
+    cols
 }
 
 fn seed_rng(cfg: &Config, stmt: &str) -> ChaCha8Rng {
@@ -366,8 +608,102 @@ fn normal_response(out: &mut BytesMut, shape: &ResultShape, cfg: &Config, stmt: 
     }
 }
 
-/// Stream an avalanche of type-correct rows until `max_rows` is reached or the
-/// client stops reading. Uses O(1) memory: one chunk buffer, reused.
+/// Extended-protocol Execute: produce DataRows + CommandComplete for a bound
+/// portal (RowDescription was already sent in response to Describe). Honors the
+/// portal's result format codes and applies crush mode, just like simple query.
+async fn execute_portal(
+    stream: &mut TcpStream,
+    out: &mut BytesMut,
+    portal: &Portal,
+    max_rows: i32,
+    shared: &Shared,
+    peer: std::net::SocketAddr,
+) -> std::io::Result<()> {
+    let cfg = &shared.cfg;
+    let sql = &portal.sql;
+    let formats = &portal.result_formats;
+    let shape = shape::extract(sql);
+
+    let class = if cfg.crush.enabled {
+        shape.crush_class(cfg.crush.threshold)
+    } else {
+        CrushClass::Safe
+    };
+
+    if let StmtKind::Select = shape.kind {
+        let cols = binarize(shape.columns.iter().map(resolve_column).collect());
+
+        // Crush: stream the avalanche directly (no extra RowDescription).
+        if matches!(class, CrushClass::Crush { .. }) && !cfg.crush.warn_only {
+            if let Ok(_permit) = shared.crush_slots.try_acquire() {
+                warn!(%peer, reasons = class.reasons(), query = truncate(sql), "CRUSH (extended)");
+                if !out.is_empty() {
+                    stream.write_all(out).await?;
+                    out.clear();
+                }
+                let mut notice = BytesMut::with_capacity(128);
+                put_notice(&mut notice, CRUSH_NOTICE);
+                stream.write_all(&notice).await?;
+                let rng = seed_rng(cfg, sql);
+                return match stream_rows(stream, &cols, formats, cfg.crush.max_rows, rng).await {
+                    Ok(n) => {
+                        info!(%peer, rows = n, "crush complete");
+                        Ok(())
+                    }
+                    Err((n, e)) => {
+                        warn!(%peer, rows = n, "crush aborted: client gave up");
+                        Err(e)
+                    }
+                };
+            }
+            put_notice(out, "crush mode at capacity — enjoy a normal answer instead");
+        } else if let CrushClass::Crush { .. } = class {
+            warn!(%peer, reasons = class.reasons(), query = truncate(sql), "unsafe query (warn-only)");
+            put_notice(out, &format!("unsafe query ({}); crush mode is warn-only", class.reasons()));
+        } else if let CrushClass::Warn { .. } = class {
+            put_notice(out, &format!("loose query ({}) — consider a column list, WHERE, or LIMIT", class.reasons()));
+        }
+
+        // Normal response.
+        let mut rng = seed_rng(cfg, sql);
+        let mut n = if shape.aggregate_only() || shape.table_hint.is_none() {
+            1
+        } else {
+            rng.random_range(cfg.rows_min..=cfg.rows_max.max(cfg.rows_min))
+        };
+        if let Some(limit) = shape.limit {
+            n = n.min(limit);
+        }
+        if max_rows > 0 {
+            n = n.min(max_rows as usize);
+        }
+        for _ in 0..n {
+            put_data_row_fmt(out, &cols, &mut rng, formats);
+        }
+        put_command_complete(out, &format!("SELECT {n}"));
+        return Ok(());
+    }
+
+    // Non-SELECT: same tags as the simple-query path.
+    let mut rng = seed_rng(cfg, sql);
+    match &shape.kind {
+        StmtKind::Empty => put_msg(out, b'I', |_| {}),
+        StmtKind::Insert => put_command_complete(out, "INSERT 0 1"),
+        StmtKind::Update => {
+            let n: u32 = rng.random_range(0..50);
+            put_command_complete(out, &format!("UPDATE {n}"));
+        }
+        StmtKind::Delete => {
+            let n: u32 = rng.random_range(0..50);
+            put_command_complete(out, &format!("DELETE {n}"));
+        }
+        StmtKind::Command(tag) => put_command_complete(out, tag),
+        StmtKind::Select => unreachable!("handled above"),
+    }
+    Ok(())
+}
+
+/// Simple-query crush: send a NOTICE + RowDescription, then the avalanche.
 ///
 /// On success returns the row count sent. On write failure returns the count
 /// sent so far plus the error (the client has almost certainly given up).
@@ -377,8 +713,6 @@ async fn crush_stream(
     cfg: &Config,
     stmt: &str,
 ) -> Result<u64, (u64, std::io::Error)> {
-    let mut rng = seed_rng(cfg, stmt);
-
     // For `SELECT *` against an unknown table, synthesise a wide, diverse
     // schema; otherwise honour the columns the client actually asked for.
     let cols: Vec<Resolved> = if shape.select_star {
@@ -388,30 +722,40 @@ async fn crush_stream(
     };
 
     let mut header = BytesMut::with_capacity(256);
-    put_notice(
-        &mut header,
-        "CRUSH MODE: this query asked for everything — here it comes",
-    );
+    put_notice(&mut header, CRUSH_NOTICE);
     put_row_description(&mut header, &cols);
     if let Err(e) = stream.write_all(&header).await {
         return Err((0, e));
     }
+    let rng = seed_rng(cfg, stmt);
+    stream_rows(stream, &cols, &[], cfg.crush.max_rows, rng).await
+}
 
-    let max = cfg.crush.max_rows;
+const CRUSH_NOTICE: &str = "CRUSH MODE: this query asked for everything — here it comes";
+
+/// Stream up to `max` DataRows in 1000-row chunks, then a CommandComplete.
+/// O(1) memory: one chunk buffer, reused. Format codes select text/binary.
+/// RowDescription (and any NOTICE) must already have been sent by the caller.
+async fn stream_rows(
+    stream: &mut TcpStream,
+    cols: &[Resolved],
+    formats: &[i16],
+    max: u64,
+    mut rng: ChaCha8Rng,
+) -> Result<u64, (u64, std::io::Error)> {
     let mut sent: u64 = 0;
     let mut chunk = BytesMut::with_capacity(64 * 1024);
     while sent < max {
         let this = CRUSH_CHUNK.min(max - sent);
         chunk.clear();
         for _ in 0..this {
-            put_data_row(&mut chunk, &cols, &mut rng);
+            put_data_row_fmt(&mut chunk, cols, &mut rng, formats);
         }
         if let Err(e) = stream.write_all(&chunk).await {
             return Err((sent, e));
         }
         sent += this;
     }
-
     let mut tail = BytesMut::with_capacity(32);
     put_command_complete(&mut tail, &format!("SELECT {sent}"));
     if let Err(e) = stream.write_all(&tail).await {

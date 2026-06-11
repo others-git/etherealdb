@@ -241,8 +241,8 @@ In crush mode, every unsafe query is logged at `WARN` level with:
 - **M0 — Skeleton**: TCP listener, connection logging, echo. Project scaffolding + CI.
 - **M1 — Inference engine standalone**: name → semantic type → value, unit-tested, no network. Ship a tiny `etherealdb infer <name>` debug subcommand.
 - **M2 — Postgres simple query**: `psql -c "select id, email, created_at from users"` returns plausible rows. **First demo-able milestone.** ✅
-- **M3 — Postgres extended + GUI-friendly stubs**: ORMs and DBeaver connect.
-- **M4 — Crush mode**: streaming unsafe-query detection + client overload.
+- **M3 — Postgres extended query protocol**: Parse/Bind/Describe/Execute with text + binary result encoding and inferred parameter types — ORMs and drivers using `query()` connect. ✅
+- **M4 — Crush mode**: streaming unsafe-query detection + client overload. ✅ (works in both simple and extended paths)
 - **M5 — MySQL frontend**.
 - **M6 — Themes + custom rules**.
 - **M7 — Redis/RESP**.
