@@ -503,3 +503,58 @@ async fn fuzz_emits_pathological_values_without_crashing() {
         "fuzz should produce some non-integer id values"
     );
 }
+
+#[tokio::test]
+async fn ghost_latency_delays_the_response() {
+    let cfg = Config {
+        ghosts: GhostConfig {
+            latency_prob: 1.0,
+            latency_ms: (120, 120),
+            ..GhostConfig::default()
+        },
+        ..Config::default()
+    };
+    let port = start_with(cfg).await;
+    let client = connect(port).await;
+
+    let t = std::time::Instant::now();
+    client
+        .simple_query("select id from users limit 1")
+        .await
+        .unwrap();
+    assert!(
+        t.elapsed().as_millis() >= 100,
+        "ghost latency should delay the query"
+    );
+}
+
+#[tokio::test]
+async fn fuzz_is_deterministic_under_seed() {
+    // With a fixed seed, fuzz values are reproducible (only fault *timing* is random).
+    let mk = || Config {
+        seed: Some(555),
+        ghosts: GhostConfig {
+            fuzz: 1.0,
+            ..GhostConfig::default()
+        },
+        ..Config::default()
+    };
+    let q = "select id, email, price from accounts limit 5";
+    let dump = |msgs: &[SimpleQueryMessage]| -> Vec<String> {
+        rows(msgs)
+            .iter()
+            .map(|r| {
+                (0..3)
+                    .map(|i| r.get(i).unwrap())
+                    .collect::<Vec<_>>()
+                    .join("|")
+            })
+            .collect()
+    };
+
+    let p1 = start_with(mk()).await;
+    let a = connect(p1).await.simple_query(q).await.unwrap();
+    let p2 = start_with(mk()).await;
+    let b = connect(p2).await.simple_query(q).await.unwrap();
+    assert_eq!(dump(&a), dump(&b), "seeded fuzz output should repeat");
+}

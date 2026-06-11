@@ -69,17 +69,37 @@ const PG_EPOCH_OFFSET_SECS: i64 = 946_684_800;
 const PG_EPOCH_OFFSET_DAYS: i64 = 10957;
 
 /// Re-encode a generated text value into the Postgres *binary* wire format for
-/// its type. We generate canonical text, so parsing it back is exact; on any
-/// unexpected input we fall back to a zero of the right width.
+/// its type. Generated text is always canonical, so parsing back is exact and
+/// the fallbacks below never fire in normal operation — they only trigger on a
+/// `--fuzz` ghost value, where an out-of-range extreme is *more* antagonistic
+/// to the client's decoder than a tame zero would be.
 fn text_to_binary(wt: WireType, text: &str) -> Vec<u8> {
     match wt {
-        WireType::Bool => vec![(text == "t" || text == "true") as u8],
-        WireType::Int4 => text.parse::<i32>().unwrap_or(0).to_be_bytes().to_vec(),
-        WireType::Int8 => text.parse::<i64>().unwrap_or(0).to_be_bytes().to_vec(),
-        // Numeric is remapped to float8 for the binary path (see `binarize`).
-        WireType::Float8 | WireType::Numeric => {
-            text.parse::<f64>().unwrap_or(0.0).to_be_bytes().to_vec()
+        // 0/1 normally; an unrecognised (fuzzed) bool becomes an invalid 2.
+        WireType::Bool => {
+            let b = match text {
+                "t" | "true" => 1,
+                "f" | "false" => 0,
+                _ => 2,
+            };
+            vec![b]
         }
+        WireType::Int4 => text
+            .parse::<i32>()
+            .unwrap_or(i32::MIN)
+            .to_be_bytes()
+            .to_vec(),
+        WireType::Int8 => text
+            .parse::<i64>()
+            .unwrap_or(i64::MIN)
+            .to_be_bytes()
+            .to_vec(),
+        // Numeric is remapped to float8 for the binary path (see `binarize`).
+        WireType::Float8 | WireType::Numeric => text
+            .parse::<f64>()
+            .unwrap_or(f64::NAN)
+            .to_be_bytes()
+            .to_vec(),
         WireType::Text | WireType::Json => text.as_bytes().to_vec(),
         WireType::Uuid => {
             let mut out = Vec::with_capacity(16);
@@ -97,14 +117,16 @@ fn text_to_binary(wt: WireType, text: &str) -> Vec<u8> {
         WireType::Date => {
             let days = parse_ymd(text)
                 .map(|(y, m, d)| crate::generate::days_from_civil(y, m, d) - PG_EPOCH_OFFSET_DAYS);
-            (days.unwrap_or(0) as i32).to_be_bytes().to_vec()
+            (days.unwrap_or(i32::MAX as i64) as i32)
+                .to_be_bytes()
+                .to_vec()
         }
         WireType::Time => {
             let micros = parse_hms(text).map(|(h, m, s)| (h * 3600 + m * 60 + s) * 1_000_000);
-            micros.unwrap_or(0).to_be_bytes().to_vec()
+            micros.unwrap_or(i64::MAX).to_be_bytes().to_vec()
         }
         WireType::Timestamp => {
-            let micros = parse_timestamp(text).unwrap_or(0);
+            let micros = parse_timestamp(text).unwrap_or(i64::MAX);
             micros.to_be_bytes().to_vec()
         }
     }
@@ -208,7 +230,6 @@ fn put_ready(buf: &mut BytesMut) {
     put_msg(buf, b'Z', |b| b.put_u8(b'I'));
 }
 
-#[allow(dead_code)] // a protocol primitive we keep on hand for future use
 fn put_error(buf: &mut BytesMut, code: &str, msg: &str) {
     put_msg(buf, b'E', |b| {
         b.put_u8(b'S');
@@ -867,4 +888,60 @@ fn truncate(s: &str) -> String {
         .find(|&i| s.is_char_boundary(i))
         .unwrap_or(0);
     format!("{}…", &s[..cut])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn binary_roundtrips_canonical_values() {
+        // Normal generated text encodes exactly (the fuzz fallbacks don't fire).
+        assert_eq!(text_to_binary(WireType::Int4, "42"), 42i32.to_be_bytes());
+        assert_eq!(text_to_binary(WireType::Int8, "-7"), (-7i64).to_be_bytes());
+        assert_eq!(text_to_binary(WireType::Bool, "t"), vec![1]);
+        assert_eq!(text_to_binary(WireType::Bool, "f"), vec![0]);
+        // 2000-01-01 is day 0 of the Postgres epoch.
+        assert_eq!(
+            text_to_binary(WireType::Date, "2000-01-01"),
+            0i32.to_be_bytes()
+        );
+        assert_eq!(
+            text_to_binary(WireType::Time, "01:00:00"),
+            3_600_000_000i64.to_be_bytes()
+        );
+    }
+
+    #[test]
+    fn binary_fuzz_values_become_antagonistic_extremes() {
+        // A fuzzed value that can't parse encodes as an out-of-range extreme,
+        // not a tame zero — so --fuzz bites binary clients too.
+        assert_eq!(
+            text_to_binary(WireType::Int8, "NaN"),
+            i64::MIN.to_be_bytes()
+        );
+        assert_eq!(
+            text_to_binary(WireType::Int4, "0x7fffffff"),
+            i32::MIN.to_be_bytes()
+        );
+        // An unparseable float falls back to NaN. (Note "Infinity"/"NaN" *do*
+        // parse to real inf/nan in Rust — themselves antagonistic.)
+        let f = f64::from_be_bytes(
+            text_to_binary(WireType::Float8, "  1 2 ")
+                .try_into()
+                .unwrap(),
+        );
+        assert!(f.is_nan());
+        let inf = f64::from_be_bytes(
+            text_to_binary(WireType::Float8, "Infinity")
+                .try_into()
+                .unwrap(),
+        );
+        assert!(inf.is_infinite());
+        assert_eq!(text_to_binary(WireType::Bool, "maybe"), vec![2]);
+        assert_eq!(
+            text_to_binary(WireType::Timestamp, "not-a-date"),
+            i64::MAX.to_be_bytes()
+        );
+    }
 }

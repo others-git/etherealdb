@@ -15,13 +15,6 @@ pub struct Gen<'a> {
     pub fuzz: f64,
 }
 
-impl<'a> Gen<'a> {
-    /// A plain (non-fuzzing) context for a theme.
-    pub fn new(theme: &'a ThemeData) -> Self {
-        Gen { theme, fuzz: 0.0 }
-    }
-}
-
 /// Generate a value, occasionally substituting a pathological one when fuzzing
 /// is enabled. `wt` is the column's declared wire type, so the ghost value can
 /// be chosen to specifically antagonise that type's decoder.
@@ -339,6 +332,22 @@ fn themed_word(rng: &mut impl Rng, theme: &ThemeData) -> &'static str {
     }
 }
 
+/// `n` themed words as a capitalized, space-joined sentence — built straight
+/// into one String (no intermediate Vec/join), which matters on the crush path.
+fn lorem(rng: &mut impl Rng, theme: &ThemeData, n: usize) -> String {
+    let mut s = String::with_capacity(n * 8);
+    for i in 0..n {
+        if i > 0 {
+            s.push(' ');
+        }
+        s.push_str(themed_word(rng, theme));
+    }
+    if let Some(c) = s.get_mut(0..1) {
+        c.make_ascii_uppercase();
+    }
+    s
+}
+
 /// Civil-from-days (Howard Hinnant's algorithm): days since 1970-01-01 -> (y, m, d).
 fn civil_from_days(z: i64) -> (i64, u32, u32) {
     let z = z + 719468;
@@ -477,24 +486,11 @@ pub fn generate(st: SemanticType, rng: &mut impl Rng, theme: &ThemeData) -> Stri
         ),
         LoremShort => {
             let n = rng.random_range(2..=4);
-            let mut s = (0..n)
-                .map(|_| themed_word(rng, theme))
-                .collect::<Vec<_>>()
-                .join(" ");
-            if let Some(c) = s.get_mut(0..1) {
-                c.make_ascii_uppercase();
-            }
-            s
+            lorem(rng, theme, n)
         }
         LoremLong => {
             let n = rng.random_range(8..=16);
-            let mut s = (0..n)
-                .map(|_| themed_word(rng, theme))
-                .collect::<Vec<_>>()
-                .join(" ");
-            if let Some(c) = s.get_mut(0..1) {
-                c.make_ascii_uppercase();
-            }
+            let mut s = lorem(rng, theme, n);
             s.push('.');
             s
         }

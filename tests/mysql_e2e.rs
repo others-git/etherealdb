@@ -242,3 +242,38 @@ async fn many_types_render_as_text() {
         assert_eq!(row[3].len(), 19, "datetime length");
     }
 }
+
+#[tokio::test]
+async fn literal_and_function_echo() {
+    let port = start_mysql(seeded()).await;
+    let mut c = MyClient::connect(port).await;
+
+    // SELECT 1 (no FROM) -> exactly one row echoing the literal.
+    let (names, rows) = c.query("select 1").await;
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0][0], "1");
+    assert_eq!(names.len(), 1);
+
+    // version() resolves to a believable server string.
+    let (_n, rows) = c.query("select version()").await;
+    assert!(rows[0][0].contains("EtherealDB"), "version: {}", rows[0][0]);
+}
+
+#[tokio::test]
+async fn theme_flows_through_mysql() {
+    let cfg = Config {
+        theme: etherealdb::theme::by_name("iot").unwrap(),
+        ..seeded()
+    };
+    let port = start_mysql(cfg).await;
+    let mut c = MyClient::connect(port).await;
+    let (_n, rows) = c.query("select status from devices limit 10").await;
+    let iot = etherealdb::theme::by_name("iot").unwrap();
+    for r in &rows {
+        assert!(
+            iot.statuses.contains(&r[0].as_str()),
+            "{} not an iot status",
+            r[0]
+        );
+    }
+}

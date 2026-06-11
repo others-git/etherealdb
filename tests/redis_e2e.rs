@@ -198,3 +198,27 @@ async fn unknown_command_errors() {
     c.send(&["FLERP", "x"]).await;
     assert!(matches!(c.reply().await, Reply::Error(_)));
 }
+
+#[tokio::test]
+async fn hget_infers_from_field_name() {
+    let port = start(seeded()).await;
+    let mut c = Client::connect(port).await;
+    // HGET <key> <field> -> value inferred from the FIELD, not the key.
+    c.send(&["HGET", "user:7", "email"]).await;
+    assert!(
+        c.reply().await.bulk().contains('@'),
+        "HGET email field -> email"
+    );
+
+    c.send(&["HGET", "user:7", "created_at"]).await;
+    assert_eq!(c.reply().await.bulk().len(), 19, "created_at -> timestamp");
+}
+
+#[tokio::test]
+async fn bool_key_renders_as_one_or_zero() {
+    let port = start(seeded()).await;
+    let mut c = Client::connect(port).await;
+    c.send(&["GET", "user:1:is_active"]).await;
+    let v = c.reply().await.bulk().to_string();
+    assert!(v == "1" || v == "0", "redis bool should be 1/0, got {v}");
+}
