@@ -38,7 +38,12 @@ impl Default for CrushConfig {
 
 impl Default for Config {
     fn default() -> Self {
-        Self { seed: None, rows_min: 5, rows_max: 20, crush: CrushConfig::default() }
+        Self {
+            seed: None,
+            rows_min: 5,
+            rows_max: 20,
+            crush: CrushConfig::default(),
+        }
     }
 }
 

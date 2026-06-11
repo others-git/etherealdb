@@ -18,7 +18,10 @@ pub struct Shared {
 impl Shared {
     pub fn new(cfg: Config) -> Arc<Self> {
         let permits = cfg.crush.concurrency.max(1);
-        Arc::new(Self { cfg, crush_slots: Semaphore::new(permits) })
+        Arc::new(Self {
+            cfg,
+            crush_slots: Semaphore::new(permits),
+        })
     }
 }
 

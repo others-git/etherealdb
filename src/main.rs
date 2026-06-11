@@ -111,7 +111,11 @@ async fn main() -> std::io::Result<()> {
         for name in names {
             let st = infer(&name);
             let samples: Vec<String> = (0..3).map(|_| generate(st, &mut rng)).collect();
-            println!("{name:<24} {:<14} {}", format!("{st:?}"), samples.join(" | "));
+            println!(
+                "{name:<24} {:<14} {}",
+                format!("{st:?}"),
+                samples.join(" | ")
+            );
         }
         return Ok(());
     }

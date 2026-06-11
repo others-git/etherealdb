@@ -27,8 +27,18 @@ const CRUSH_CHUNK: u64 = 1000;
 /// A deliberately wide, type-diverse schema synthesised for `SELECT *` against
 /// an unknown table — exercises many client codepaths at once.
 static WIDE_CRUSH_COLUMNS: &[&str] = &[
-    "id", "uuid", "name", "email", "phone", "status", "created_at", "updated_at", "price",
-    "is_active", "description", "metadata",
+    "id",
+    "uuid",
+    "name",
+    "email",
+    "phone",
+    "status",
+    "created_at",
+    "updated_at",
+    "price",
+    "is_active",
+    "description",
+    "metadata",
 ];
 
 const PROTO_V3: i32 = 196608;
@@ -76,16 +86,17 @@ fn text_to_binary(wt: WireType, text: &str) -> Vec<u8> {
             let hex: Vec<u8> = text.bytes().filter(u8::is_ascii_hexdigit).collect();
             for pair in hex.chunks(2).take(16) {
                 let hi = (pair[0] as char).to_digit(16).unwrap_or(0);
-                let lo = pair.get(1).map_or(0, |c| (*c as char).to_digit(16).unwrap_or(0));
+                let lo = pair
+                    .get(1)
+                    .map_or(0, |c| (*c as char).to_digit(16).unwrap_or(0));
                 out.push((hi * 16 + lo) as u8);
             }
             out.resize(16, 0);
             out
         }
         WireType::Date => {
-            let days = parse_ymd(text).map(|(y, m, d)| {
-                crate::generate::days_from_civil(y, m, d) - PG_EPOCH_OFFSET_DAYS
-            });
+            let days = parse_ymd(text)
+                .map(|(y, m, d)| crate::generate::days_from_civil(y, m, d) - PG_EPOCH_OFFSET_DAYS);
             (days.unwrap_or(0) as i32).to_be_bytes().to_vec()
         }
         WireType::Time => {
@@ -158,7 +169,10 @@ impl<'a> Reader<'a> {
     /// Read a NUL-terminated string.
     fn cstr(&mut self) -> String {
         let start = self.pos.min(self.b.len());
-        let end = self.b[start..].iter().position(|&c| c == 0).map_or(self.b.len(), |i| start + i);
+        let end = self.b[start..]
+            .iter()
+            .position(|&c| c == 0)
+            .map_or(self.b.len(), |i| start + i);
         let s = String::from_utf8_lossy(&self.b[start..end]).into_owned();
         self.pos = (end + 1).min(self.b.len() + 1);
         s
@@ -313,8 +327,8 @@ pub async fn handle(mut stream: TcpStream, shared: Arc<Shared>) -> std::io::Resu
         match tag {
             // --- simple query
             b'Q' => {
-                let sql =
-                    String::from_utf8_lossy(payload.strip_suffix(&[0]).unwrap_or(&payload)).into_owned();
+                let sql = String::from_utf8_lossy(payload.strip_suffix(&[0]).unwrap_or(&payload))
+                    .into_owned();
                 debug!(%peer, %sql, "query");
                 let stmts = shape::split_statements(&sql);
                 if stmts.is_empty() {
@@ -355,7 +369,13 @@ pub async fn handle(mut stream: TcpStream, shared: Arc<Shared>) -> std::io::Resu
                 let n_result_formats = r.i16().max(0) as usize;
                 let result_formats: Vec<i16> = (0..n_result_formats).map(|_| r.i16()).collect();
                 let sql = statements.get(&stmt_name).cloned().unwrap_or_default();
-                portals.insert(portal, Portal { sql, result_formats });
+                portals.insert(
+                    portal,
+                    Portal {
+                        sql,
+                        result_formats,
+                    },
+                );
                 put_msg(&mut out, b'2', |_| {}); // BindComplete
             }
 
@@ -542,19 +562,31 @@ async fn respond_statement(
                     return Ok(());
                 }
                 Err(_) => {
-                    put_notice(out, "crush mode at capacity — enjoy a normal answer instead");
+                    put_notice(
+                        out,
+                        "crush mode at capacity — enjoy a normal answer instead",
+                    );
                 }
             }
         }
         CrushClass::Crush { .. } => {
             // warn-only: name and shame, then answer normally.
             warn!(%peer, reasons = class.reasons(), query = truncate(stmt), "unsafe query (warn-only)");
-            put_notice(out, &format!("unsafe query ({}); crush mode is warn-only", class.reasons()));
+            put_notice(
+                out,
+                &format!(
+                    "unsafe query ({}); crush mode is warn-only",
+                    class.reasons()
+                ),
+            );
         }
         CrushClass::Warn { .. } => {
             put_notice(
                 out,
-                &format!("loose query ({}) — consider a column list, WHERE, or LIMIT", class.reasons()),
+                &format!(
+                    "loose query ({}) — consider a column list, WHERE, or LIMIT",
+                    class.reasons()
+                ),
             );
         }
         CrushClass::Safe => {}
@@ -650,12 +682,27 @@ async fn execute_portal(
                     }
                 };
             }
-            put_notice(out, "crush mode at capacity — enjoy a normal answer instead");
+            put_notice(
+                out,
+                "crush mode at capacity — enjoy a normal answer instead",
+            );
         } else if let CrushClass::Crush { .. } = class {
             warn!(%peer, reasons = class.reasons(), query = truncate(sql), "unsafe query (warn-only)");
-            put_notice(out, &format!("unsafe query ({}); crush mode is warn-only", class.reasons()));
+            put_notice(
+                out,
+                &format!(
+                    "unsafe query ({}); crush mode is warn-only",
+                    class.reasons()
+                ),
+            );
         } else if let CrushClass::Warn { .. } = class {
-            put_notice(out, &format!("loose query ({}) — consider a column list, WHERE, or LIMIT", class.reasons()));
+            put_notice(
+                out,
+                &format!(
+                    "loose query ({}) — consider a column list, WHERE, or LIMIT",
+                    class.reasons()
+                ),
+            );
         }
 
         // Normal response.
@@ -712,7 +759,10 @@ async fn crush_stream(
     // For `SELECT *` against an unknown table, synthesise a wide, diverse
     // schema; otherwise honour the columns the client actually asked for.
     let cols: Vec<Resolved> = if shape.select_star {
-        WIDE_CRUSH_COLUMNS.iter().map(|n| Resolved::from_name(n)).collect()
+        WIDE_CRUSH_COLUMNS
+            .iter()
+            .map(|n| Resolved::from_name(n))
+            .collect()
     } else {
         shape.columns.iter().map(Resolved::from_spec).collect()
     };
@@ -765,7 +815,9 @@ fn truncate(s: &str) -> String {
     if s.len() <= MAX {
         return s.to_string();
     }
-    let cut = (0..=MAX).rev().find(|&i| s.is_char_boundary(i)).unwrap_or(0);
+    let cut = (0..=MAX)
+        .rev()
+        .find(|&i| s.is_char_boundary(i))
+        .unwrap_or(0);
     format!("{}…", &s[..cut])
 }
-

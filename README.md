@@ -1,9 +1,21 @@
-# EtherealDB
+<p align="center">
+  <img src="assets/etherealdb.svg" width="140" height="140" alt="EtherealDB logo">
+</p>
 
-> A database that isn't there.
+<h1 align="center">EtherealDB</h1>
 
-EtherealDB speaks the PostgreSQL wire protocol, accepts **any** query, and
-returns random-but-plausible nonsense. Column values are chosen by a
+<p align="center"><em>A database that isn't there.</em></p>
+
+<p align="center">
+  <img src="https://img.shields.io/badge/built%20with-Rust-dea584?logo=rust&logoColor=white" alt="Rust">
+  <img src="https://img.shields.io/badge/protocols-PostgreSQL%20%7C%20MySQL-a78bfa" alt="Protocols">
+  <img src="https://img.shields.io/badge/license-MIT-7dd3fc" alt="License">
+  <!-- Once pushed to GitHub, swap OWNER/REPO below for a live CI badge:
+  <img src="https://github.com/OWNER/REPO/actions/workflows/ci.yml/badge.svg" alt="CI"> -->
+</p>
+
+EtherealDB speaks the PostgreSQL (and MySQL) wire protocol, accepts **any**
+query, and returns random-but-plausible nonsense. Column values are chosen by a
 lightweight inference engine that guesses a column's semantic type from its
 name: `email` gets email addresses, `created_at` gets timestamps, `price`
 gets decimals, `is_active` gets booleans.
@@ -101,9 +113,28 @@ client is on its own.
 
 See [PLAN.md](PLAN.md) for the roadmap: themes, custom inference rules, Redis.
 
+## Docker
+
+The image is a ~10 MB static binary on Alpine, listening on both protocols:
+
+```sh
+docker build -t etherealdb .
+docker run --rm -p 5432:5432 -p 3306:3306 etherealdb
+
+# pass flags through (they override the default CMD):
+docker run --rm -p 5432:5432 etherealdb --pg 0.0.0.0:5432 --seed 42 --crush
+```
+
+Released images are published to GHCR on every tag (`ghcr.io/OWNER/REPO`).
+
 ## Development
 
 ```sh
-cargo test     # unit tests + end-to-end against a real postgres client
-cargo run      # start the server
+cargo test            # unit tests + e2e against real postgres & mysql clients
+cargo run             # start the server
+cargo fmt --check && cargo clippy --all-targets -- -D warnings
 ```
+
+CI runs fmt, clippy, the full test suite, and a Docker build on every push;
+tagging `vX.Y.Z` builds release binaries (x86_64 + aarch64 musl) and pushes a
+multi-arch image.

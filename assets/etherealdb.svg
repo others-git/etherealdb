@@ -1,0 +1,43 @@
+<svg width="256" height="256" viewBox="0 0 256 256" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="EtherealDB logo">
+  <defs>
+    <linearGradient id="ether" x1="40" y1="40" x2="216" y2="216" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#7dd3fc"/>
+      <stop offset="0.5" stop-color="#a78bfa"/>
+      <stop offset="1" stop-color="#f0abfc"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.5" cy="0.42" r="0.6">
+      <stop offset="0" stop-color="#a78bfa" stop-opacity="0.35"/>
+      <stop offset="1" stop-color="#a78bfa" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="soft" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="2.2"/>
+    </filter>
+  </defs>
+
+  <!-- night panel -->
+  <rect x="2" y="2" width="252" height="252" rx="56" fill="#0b1020"/>
+  <rect x="2.5" y="2.5" width="251" height="251" rx="55.5" stroke="url(#ether)" stroke-opacity="0.25"/>
+  <circle cx="128" cy="120" r="96" fill="url(#glow)"/>
+
+  <!-- ethereal echo of the top rim (it's a database that isn't quite there) -->
+  <ellipse cx="128" cy="74" rx="64" ry="20" stroke="url(#ether)" stroke-opacity="0.3" stroke-width="2" stroke-dasharray="5 7"/>
+
+  <!-- the vanishing database: a cylinder dissolving into a ghost tail -->
+  <g filter="url(#soft)" opacity="0.5">
+    <path d="M64 84 C64 56 192 56 192 84 L192 168 q-16 18 -32 0 q-16 18 -32 0 q-16 18 -32 0 q-16 18 -32 0 L64 84 Z" fill="url(#ether)" fill-opacity="0.18"/>
+  </g>
+  <path d="M64 84 C64 56 192 56 192 84 L192 168 q-16 18 -32 0 q-16 18 -32 0 q-16 18 -32 0 q-16 18 -32 0 L64 84 Z"
+        fill="url(#ether)" fill-opacity="0.10" stroke="url(#ether)" stroke-width="3.5" stroke-linejoin="round"/>
+
+  <!-- the disk rim and the data bands -->
+  <ellipse cx="128" cy="84" rx="64" ry="20" stroke="url(#ether)" stroke-width="3.5"/>
+  <path d="M64 116 a64 20 0 0 0 128 0" stroke="url(#ether)" stroke-width="3" stroke-opacity="0.85"/>
+  <path d="M64 144 a64 20 0 0 0 128 0" stroke="url(#ether)" stroke-width="3" stroke-opacity="0.7"/>
+
+  <!-- sparkles: nothing here is real -->
+  <g fill="#e9d5ff">
+    <path d="M58 56 Q60 62 66 64 Q60 66 58 72 Q56 66 50 64 Q56 62 58 56 Z"/>
+    <path d="M206 118 Q209 126 217 129 Q209 132 206 140 Q203 132 195 129 Q203 126 206 118 Z" fill="#bae6fd"/>
+    <path d="M176 198 Q178 203 183 205 Q178 207 176 212 Q174 207 169 205 Q174 203 176 198 Z" fill="#f5d0fe"/>
+  </g>
+</svg>

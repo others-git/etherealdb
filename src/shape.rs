@@ -36,14 +36,24 @@ impl Resolved {
             }
             wt = cast;
         }
-        Resolved { name: c.name.clone(), st, wt, literal: None }
+        Resolved {
+            name: c.name.clone(),
+            st,
+            wt,
+            literal: None,
+        }
     }
 
     /// Resolve a bare column name (no cast/literal) — used for synthesised
     /// schemas like the wide crush columns.
     pub fn from_name(name: &str) -> Self {
         let st = infer::infer(name);
-        Resolved { name: name.to_string(), st, wt: infer::wire_type(st), literal: None }
+        Resolved {
+            name: name.to_string(),
+            st,
+            wt: infer::wire_type(st),
+            literal: None,
+        }
     }
 }
 
@@ -72,7 +82,12 @@ pub struct ColumnSpec {
 
 impl ColumnSpec {
     fn named(name: impl Into<String>) -> Self {
-        Self { name: name.into(), cast: None, literal: None, aggregate: false }
+        Self {
+            name: name.into(),
+            cast: None,
+            literal: None,
+            aggregate: false,
+        }
     }
 }
 
@@ -138,9 +153,17 @@ impl ResultShape {
             CrushThreshold::All3 => count == 3,
         };
         if triggered {
-            CrushClass::Crush { broad, no_where, no_limit }
+            CrushClass::Crush {
+                broad,
+                no_where,
+                no_limit,
+            }
         } else if count >= 2 {
-            CrushClass::Warn { broad, no_where, no_limit }
+            CrushClass::Warn {
+                broad,
+                no_where,
+                no_limit,
+            }
         } else {
             CrushClass::Safe
         }
@@ -160,8 +183,16 @@ pub enum CrushThreshold {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CrushClass {
     Safe,
-    Warn { broad: bool, no_where: bool, no_limit: bool },
-    Crush { broad: bool, no_where: bool, no_limit: bool },
+    Warn {
+        broad: bool,
+        no_where: bool,
+        no_limit: bool,
+    },
+    Crush {
+        broad: bool,
+        no_where: bool,
+        no_limit: bool,
+    },
 }
 
 impl CrushClass {
@@ -169,8 +200,16 @@ impl CrushClass {
     pub fn reasons(&self) -> String {
         let (broad, no_where, no_limit) = match self {
             CrushClass::Safe => return String::new(),
-            CrushClass::Warn { broad, no_where, no_limit }
-            | CrushClass::Crush { broad, no_where, no_limit } => (*broad, *no_where, *no_limit),
+            CrushClass::Warn {
+                broad,
+                no_where,
+                no_limit,
+            }
+            | CrushClass::Crush {
+                broad,
+                no_where,
+                no_limit,
+            } => (*broad, *no_where, *no_limit),
         };
         let mut r = Vec::new();
         if broad {
@@ -233,7 +272,12 @@ fn nearby_column(sql: &str, dollar: usize) -> Option<String> {
     let b = sql.as_bytes();
     // look left: skip spaces, then a run of operator chars, then spaces
     let mut k = dollar;
-    let is_op = |c: u8| matches!(c, b'=' | b'<' | b'>' | b'!' | b'~' | b'+' | b'-' | b'*' | b'/');
+    let is_op = |c: u8| {
+        matches!(
+            c,
+            b'=' | b'<' | b'>' | b'!' | b'~' | b'+' | b'-' | b'*' | b'/'
+        )
+    };
     while k > 0 && b[k - 1].is_ascii_whitespace() {
         k -= 1;
     }
@@ -283,7 +327,11 @@ fn split_top_level(s: &str, sep: char) -> Vec<&str> {
         }
     }
     parts.push(&s[start..]);
-    parts.into_iter().map(str::trim).filter(|p| !p.is_empty()).collect()
+    parts
+        .into_iter()
+        .map(str::trim)
+        .filter(|p| !p.is_empty())
+        .collect()
 }
 
 /// Word tokens (lowercased) at top level, with byte offsets.
@@ -349,7 +397,10 @@ pub fn extract(stmt: &str) -> ResultShape {
         "show" => {
             // SHOW x -> one column named x, one row. A couple of params get
             // believable fixed values; the rest get "on".
-            let param = words.get(1).map(|(w, _, _)| w.clone()).unwrap_or_else(|| "setting".into());
+            let param = words
+                .get(1)
+                .map(|(w, _, _)| w.clone())
+                .unwrap_or_else(|| "setting".into());
             let value = match param.as_str() {
                 "server_version" => "16.3 (EtherealDB 0.1.0)".to_string(),
                 "server_encoding" | "client_encoding" => "UTF8".to_string(),
@@ -371,12 +422,15 @@ pub fn extract(stmt: &str) -> ResultShape {
         _ => {
             // BEGIN/COMMIT/SET/CREATE TABLE/... — ack with a plausible tag.
             let mut tag = first.to_ascii_uppercase();
-            if matches!(first, "create" | "drop" | "alter" | "truncate") {
-                if let Some((w, _, _)) = words.get(1) {
-                    tag = format!("{tag} {}", w.to_ascii_uppercase());
-                }
+            if matches!(first, "create" | "drop" | "alter" | "truncate")
+                && let Some((w, _, _)) = words.get(1)
+            {
+                tag = format!("{tag} {}", w.to_ascii_uppercase());
             }
-            ResultShape { kind: StmtKind::Command(tag), ..Default::default() }
+            ResultShape {
+                kind: StmtKind::Command(tag),
+                ..Default::default()
+            }
         }
     }
 }
@@ -395,7 +449,11 @@ fn raw_after<'a>(words: &[(String, usize, usize)], stmt: &'a str, kw: &str) -> O
 fn word_after(words: &[(String, usize, usize)], stmt: &str, kw: &str) -> Option<String> {
     let raw = raw_after(words, stmt, kw)?;
     let name = raw.rsplit('.').next().unwrap_or(raw).trim_matches('"');
-    if name.is_empty() { None } else { Some(name.to_ascii_lowercase()) }
+    if name.is_empty() {
+        None
+    } else {
+        Some(name.to_ascii_lowercase())
+    }
 }
 
 /// True when a FROM target is a Postgres system catalog — either schema-
@@ -415,11 +473,26 @@ fn extract_select(stmt: &str, words: &[(String, usize, usize)]) -> ResultShape {
     // first top-level "select" is the main one.
     let sel = words.iter().position(|(w, _, _)| w == "select");
     let Some(sel) = sel else {
-        return ResultShape { kind: StmtKind::Command("SELECT".into()), ..Default::default() };
+        return ResultShape {
+            kind: StmtKind::Command("SELECT".into()),
+            ..Default::default()
+        };
     };
 
-    const LIST_END: &[&str] =
-        &["from", "where", "group", "order", "having", "limit", "offset", "union", "except", "intersect", "into", "for"];
+    const LIST_END: &[&str] = &[
+        "from",
+        "where",
+        "group",
+        "order",
+        "having",
+        "limit",
+        "offset",
+        "union",
+        "except",
+        "intersect",
+        "into",
+        "for",
+    ];
     let end = words[sel + 1..]
         .iter()
         .find(|(w, _, _)| LIST_END.contains(&w.as_str()))
@@ -430,9 +503,7 @@ fn extract_select(stmt: &str, words: &[(String, usize, usize)]) -> ResultShape {
     // skip DISTINCT / ALL
     for kw in ["distinct", "all"] {
         let lower = cols_text.to_ascii_lowercase();
-        if lower.starts_with(kw)
-            && cols_text[kw.len()..].starts_with(|c: char| c.is_whitespace())
-        {
+        if lower.starts_with(kw) && cols_text[kw.len()..].starts_with(|c: char| c.is_whitespace()) {
             cols_text = cols_text[kw.len()..].trim_start();
         }
     }
@@ -506,11 +577,11 @@ fn parse_item(item: &str, out: &mut Vec<ColumnSpec>) {
     if let Some(a) = alias {
         spec.name = a;
     }
-    if cast.is_some() {
-        spec.cast = cast;
+    if let Some(cast) = cast {
+        spec.cast = Some(cast);
         // a cast on a literal also retypes the echo
         if let Some((v, _)) = spec.literal.take() {
-            spec.literal = Some((v, cast.unwrap()));
+            spec.literal = Some((v, cast));
         }
     }
     out.push(spec);
@@ -548,15 +619,19 @@ fn scalar_introspection(name: &str) -> Option<(&'static str, String, WireType)> 
             v("PostgreSQL 16.3 (EtherealDB 0.1.0) on x86_64-pc-linux-gnu"),
             WireType::Text,
         ),
-        "current_database" | "current_catalog" => ("current_database", v("ethereal"), WireType::Text),
+        "current_database" | "current_catalog" => {
+            ("current_database", v("ethereal"), WireType::Text)
+        }
         "current_schema" => ("current_schema", v("public"), WireType::Text),
         "current_user" | "current_role" | "session_user" => {
             ("current_user", v("ghost"), WireType::Text)
         }
         "pg_backend_pid" => ("pg_backend_pid", v("12345"), WireType::Int4),
-        "pg_postmaster_start_time" => {
-            ("pg_postmaster_start_time", v("2026-01-01 00:00:00"), WireType::Timestamp)
-        }
+        "pg_postmaster_start_time" => (
+            "pg_postmaster_start_time",
+            v("2026-01-01 00:00:00"),
+            WireType::Timestamp,
+        ),
         _ => return None,
     })
 }
@@ -566,12 +641,17 @@ fn classify_expr(expr: &str) -> ColumnSpec {
 
     // numeric literal
     if !expr.is_empty()
-        && expr.chars().enumerate().all(|(i, c)| {
-            c.is_ascii_digit() || c == '.' || (i == 0 && c == '-')
-        })
+        && expr
+            .chars()
+            .enumerate()
+            .all(|(i, c)| c.is_ascii_digit() || c == '.' || (i == 0 && c == '-'))
         && expr.chars().any(|c| c.is_ascii_digit())
     {
-        let wt = if expr.contains('.') { WireType::Numeric } else { WireType::Int4 };
+        let wt = if expr.contains('.') {
+            WireType::Numeric
+        } else {
+            WireType::Int4
+        };
         return ColumnSpec {
             name: "?column?".into(),
             cast: None,
@@ -612,8 +692,17 @@ fn classify_expr(expr: &str) -> ColumnSpec {
     }
 
     // plain (possibly qualified) identifier: u.email -> email
-    let name = expr.rsplit('.').next().unwrap_or(expr).trim().trim_matches('"');
-    if !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == ' ') {
+    let name = expr
+        .rsplit('.')
+        .next()
+        .unwrap_or(expr)
+        .trim()
+        .trim_matches('"');
+    if !name.is_empty()
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == ' ')
+    {
         // bare keyword forms: current_user, current_schema, ... (no parens)
         if let Some((col, value, wt)) = scalar_introspection(&name.to_ascii_lowercase()) {
             return ColumnSpec {
@@ -657,7 +746,9 @@ mod tests {
 
     #[test]
     fn aliases_and_qualified_names() {
-        let s = extract("SELECT u.email AS contact, o.total FROM users u JOIN orders o ON o.user_id = u.id");
+        let s = extract(
+            "SELECT u.email AS contact, o.total FROM users u JOIN orders o ON o.user_id = u.id",
+        );
         assert_eq!(names(&s), ["contact", "total"]);
         assert_eq!(s.table_hint.as_deref(), Some("users"));
     }
@@ -686,7 +777,10 @@ mod tests {
 
     #[test]
     fn dml_kinds() {
-        assert_eq!(extract("INSERT INTO t (a) VALUES (1)").kind, StmtKind::Insert);
+        assert_eq!(
+            extract("INSERT INTO t (a) VALUES (1)").kind,
+            StmtKind::Insert
+        );
         assert_eq!(extract("update t set a = 1").kind, StmtKind::Update);
         assert_eq!(extract("DELETE FROM t WHERE id = 3").kind, StmtKind::Delete);
     }
@@ -722,14 +816,28 @@ mod tests {
     fn show_returns_value() {
         let s = extract("SHOW server_version");
         assert_eq!(s.columns[0].name, "server_version");
-        assert!(s.columns[0].literal.as_ref().unwrap().0.contains("EtherealDB"));
+        assert!(
+            s.columns[0]
+                .literal
+                .as_ref()
+                .unwrap()
+                .0
+                .contains("EtherealDB")
+        );
     }
 
     #[test]
     fn scalar_introspection_functions() {
         let s = extract("select version()");
         assert_eq!(s.columns[0].name, "version");
-        assert!(s.columns[0].literal.as_ref().unwrap().0.starts_with("PostgreSQL"));
+        assert!(
+            s.columns[0]
+                .literal
+                .as_ref()
+                .unwrap()
+                .0
+                .starts_with("PostgreSQL")
+        );
 
         let s = extract("SELECT current_database()");
         assert_eq!(s.columns[0].name, "current_database");
@@ -791,9 +899,18 @@ mod tests {
 
     #[test]
     fn aggregates_and_tableless_are_always_safe() {
-        assert_eq!(extract("select count(*) from events").crush_class(CrushThreshold::All3), CrushClass::Safe);
-        assert_eq!(extract("select 1").crush_class(CrushThreshold::All3), CrushClass::Safe);
-        assert_eq!(extract("select now()").crush_class(CrushThreshold::Star), CrushClass::Safe);
+        assert_eq!(
+            extract("select count(*) from events").crush_class(CrushThreshold::All3),
+            CrushClass::Safe
+        );
+        assert_eq!(
+            extract("select 1").crush_class(CrushThreshold::All3),
+            CrushClass::Safe
+        );
+        assert_eq!(
+            extract("select now()").crush_class(CrushThreshold::Star),
+            CrushClass::Safe
+        );
     }
 
     #[test]
@@ -807,8 +924,14 @@ mod tests {
 
     #[test]
     fn dml_never_crushes() {
-        assert_eq!(extract("delete from users").crush_class(CrushThreshold::Star), CrushClass::Safe);
-        assert_eq!(extract("update users set x = 1").crush_class(CrushThreshold::Star), CrushClass::Safe);
+        assert_eq!(
+            extract("delete from users").crush_class(CrushThreshold::Star),
+            CrushClass::Safe
+        );
+        assert_eq!(
+            extract("update users set x = 1").crush_class(CrushThreshold::Star),
+            CrushClass::Safe
+        );
     }
 
     #[test]
@@ -828,7 +951,8 @@ mod tests {
 
     #[test]
     fn subquery_where_does_not_count_as_predicate() {
-        let s = extract("select * from users where id in (select user_id from orders where total > 0)");
+        let s =
+            extract("select * from users where id in (select user_id from orders where total > 0)");
         // top-level WHERE is present here, so it should be detected.
         assert!(s.has_where);
         // but a WHERE only inside the FROM subquery must not count:

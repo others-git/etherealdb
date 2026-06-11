@@ -148,7 +148,10 @@ fn parse_column_name(def: &[u8]) -> String {
 }
 
 fn seeded() -> Config {
-    Config { seed: Some(7), ..Config::default() }
+    Config {
+        seed: Some(7),
+        ..Config::default()
+    }
 }
 
 #[tokio::test]
@@ -156,7 +159,9 @@ async fn handshake_and_select() {
     let port = start_mysql(seeded()).await;
     let mut c = MyClient::connect(port).await;
 
-    let (names, rows) = c.query("select id, email, is_active from users limit 5").await;
+    let (names, rows) = c
+        .query("select id, email, is_active from users limit 5")
+        .await;
     assert_eq!(names, ["id", "email", "is_active"]);
     assert!((1..=5).contains(&rows.len()), "got {} rows", rows.len());
     for row in &rows {
@@ -188,14 +193,24 @@ async fn catalog_query_is_empty() {
     let port = start_mysql(Config::default()).await;
     let mut c = MyClient::connect(port).await;
     // information_schema is a system catalog -> zero rows.
-    let (_n, rows) = c.query("select table_name from information_schema.tables").await;
-    assert!(rows.is_empty(), "catalog should be empty, got {}", rows.len());
+    let (_n, rows) = c
+        .query("select table_name from information_schema.tables")
+        .await;
+    assert!(
+        rows.is_empty(),
+        "catalog should be empty, got {}",
+        rows.len()
+    );
 }
 
 #[tokio::test]
 async fn crush_streams_many_rows() {
     let cfg = Config {
-        crush: CrushConfig { enabled: true, max_rows: 8_000, ..CrushConfig::default() },
+        crush: CrushConfig {
+            enabled: true,
+            max_rows: 8_000,
+            ..CrushConfig::default()
+        },
         ..Config::default()
     };
     let port = start_mysql(cfg).await;
@@ -212,11 +227,18 @@ async fn many_types_render_as_text() {
     let (names, rows) = c
         .query("select account_uuid, signup_date, balance, created_at from members limit 3")
         .await;
-    assert_eq!(names, ["account_uuid", "signup_date", "balance", "created_at"]);
+    assert_eq!(
+        names,
+        ["account_uuid", "signup_date", "balance", "created_at"]
+    );
     for row in &rows {
         assert_eq!(row[0].len(), 36, "uuid text length");
         assert_eq!(row[1].len(), 10, "date YYYY-MM-DD");
-        assert!(row[2].parse::<f64>().is_ok(), "balance not decimal: {}", row[2]);
+        assert!(
+            row[2].parse::<f64>().is_ok(),
+            "balance not decimal: {}",
+            row[2]
+        );
         assert_eq!(row[3].len(), 19, "datetime length");
     }
 }

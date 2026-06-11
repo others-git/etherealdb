@@ -8,80 +8,229 @@ use crate::infer::SemanticType;
 
 static FIRST_NAMES: &[&str] = &[
     "Alice", "Marcus", "Yuki", "Priya", "Omar", "Ingrid", "Chen", "Fatima", "Diego", "Astrid",
-    "Kofi", "Elena", "Hiro", "Zara", "Lars", "Amara", "Felix", "Noor", "Mateo", "Sigrid",
-    "Ravi", "Lucia", "Emeka", "Hannah", "Tomas", "Mei", "Andrei", "Leila", "Bjorn", "Carmen",
-    "Dmitri", "Aisha", "Pablo", "Greta", "Kenji", "Rosa", "Viktor", "Nadia", "Sven", "Imani",
+    "Kofi", "Elena", "Hiro", "Zara", "Lars", "Amara", "Felix", "Noor", "Mateo", "Sigrid", "Ravi",
+    "Lucia", "Emeka", "Hannah", "Tomas", "Mei", "Andrei", "Leila", "Bjorn", "Carmen", "Dmitri",
+    "Aisha", "Pablo", "Greta", "Kenji", "Rosa", "Viktor", "Nadia", "Sven", "Imani",
 ];
 
 static LAST_NAMES: &[&str] = &[
-    "Okafor", "Lindqvist", "Tanaka", "Petrov", "Garcia", "Nguyen", "Schmidt", "Rossi", "Kowalski",
-    "Andersson", "Yamamoto", "Silva", "Novak", "Haddad", "Eriksen", "Moreau", "Castillo", "Weber",
-    "Ivanova", "Fernandez", "Larsen", "Dubois", "Hoffmann", "Marino", "Sato", "Virtanen", "Costa",
-    "Bergström", "Olawale", "Kimura", "Vasquez", "Lehmann", "Romano", "Park", "Almeida", "Fischer",
+    "Okafor",
+    "Lindqvist",
+    "Tanaka",
+    "Petrov",
+    "Garcia",
+    "Nguyen",
+    "Schmidt",
+    "Rossi",
+    "Kowalski",
+    "Andersson",
+    "Yamamoto",
+    "Silva",
+    "Novak",
+    "Haddad",
+    "Eriksen",
+    "Moreau",
+    "Castillo",
+    "Weber",
+    "Ivanova",
+    "Fernandez",
+    "Larsen",
+    "Dubois",
+    "Hoffmann",
+    "Marino",
+    "Sato",
+    "Virtanen",
+    "Costa",
+    "Bergström",
+    "Olawale",
+    "Kimura",
+    "Vasquez",
+    "Lehmann",
+    "Romano",
+    "Park",
+    "Almeida",
+    "Fischer",
 ];
 
 static COMPANY_STEMS: &[&str] = &[
     "Lumen", "Vexel", "Quark", "Nimbus", "Apex", "Zephyr", "Onyx", "Fathom", "Strato", "Ember",
-    "Cobalt", "Drift", "Pulse", "Vertex", "Halcyon", "Mosaic", "Tundra", "Cinder", "Meridian", "Flux",
+    "Cobalt", "Drift", "Pulse", "Vertex", "Halcyon", "Mosaic", "Tundra", "Cinder", "Meridian",
+    "Flux",
 ];
 
 static COMPANY_SUFFIXES: &[&str] = &[
-    "Labs", "Systems", "Dynamics", "Industries", "Works", "Forge", "Analytics", "Logic",
-    "Networks", "Holdings", "Collective", "Technologies", "Group", "Co.",
+    "Labs",
+    "Systems",
+    "Dynamics",
+    "Industries",
+    "Works",
+    "Forge",
+    "Analytics",
+    "Logic",
+    "Networks",
+    "Holdings",
+    "Collective",
+    "Technologies",
+    "Group",
+    "Co.",
 ];
 
 static CITIES: &[&str] = &[
-    "Portland", "Osaka", "Helsinki", "Marseille", "Cartagena", "Tbilisi", "Brisbane", "Kraków",
-    "Valparaíso", "Tampere", "Da Nang", "Leipzig", "Galway", "Kumasi", "Bologna", "Sapporo",
-    "Rotterdam", "Antwerp", "Curitiba", "Ljubljana", "Wellington", "Porto", "Gdańsk", "Bandung",
+    "Portland",
+    "Osaka",
+    "Helsinki",
+    "Marseille",
+    "Cartagena",
+    "Tbilisi",
+    "Brisbane",
+    "Kraków",
+    "Valparaíso",
+    "Tampere",
+    "Da Nang",
+    "Leipzig",
+    "Galway",
+    "Kumasi",
+    "Bologna",
+    "Sapporo",
+    "Rotterdam",
+    "Antwerp",
+    "Curitiba",
+    "Ljubljana",
+    "Wellington",
+    "Porto",
+    "Gdańsk",
+    "Bandung",
 ];
 
 static COUNTRIES: &[&str] = &[
-    "Japan", "Brazil", "Finland", "Ghana", "Portugal", "New Zealand", "Poland", "Chile",
-    "Vietnam", "Germany", "Ireland", "Georgia", "Australia", "Netherlands", "Slovenia",
-    "Indonesia", "Italy", "Belgium", "Canada", "Morocco", "Estonia", "Uruguay",
+    "Japan",
+    "Brazil",
+    "Finland",
+    "Ghana",
+    "Portugal",
+    "New Zealand",
+    "Poland",
+    "Chile",
+    "Vietnam",
+    "Germany",
+    "Ireland",
+    "Georgia",
+    "Australia",
+    "Netherlands",
+    "Slovenia",
+    "Indonesia",
+    "Italy",
+    "Belgium",
+    "Canada",
+    "Morocco",
+    "Estonia",
+    "Uruguay",
 ];
 
 static COUNTRY_CODES: &[&str] = &[
-    "JP", "BR", "FI", "GH", "PT", "NZ", "PL", "CL", "VN", "DE", "IE", "GE", "AU", "NL", "SI",
-    "ID", "IT", "BE", "CA", "MA", "EE", "UY",
+    "JP", "BR", "FI", "GH", "PT", "NZ", "PL", "CL", "VN", "DE", "IE", "GE", "AU", "NL", "SI", "ID",
+    "IT", "BE", "CA", "MA", "EE", "UY",
 ];
 
 static STREET_NAMES: &[&str] = &[
-    "Maple", "Harbor", "Juniper", "Birchwood", "Cedar", "Foxglove", "Larkspur", "Willow",
-    "Granite", "Meadow", "Alder", "Bayview", "Clover", "Driftwood", "Elm", "Hazel",
+    "Maple",
+    "Harbor",
+    "Juniper",
+    "Birchwood",
+    "Cedar",
+    "Foxglove",
+    "Larkspur",
+    "Willow",
+    "Granite",
+    "Meadow",
+    "Alder",
+    "Bayview",
+    "Clover",
+    "Driftwood",
+    "Elm",
+    "Hazel",
 ];
 
-static STREET_TYPES: &[&str] = &["St", "Ave", "Blvd", "Lane", "Way", "Court", "Drive", "Terrace"];
+static STREET_TYPES: &[&str] = &[
+    "St", "Ave", "Blvd", "Lane", "Way", "Court", "Drive", "Terrace",
+];
 
 static COLORS: &[&str] = &[
-    "crimson", "teal", "ochre", "violet", "chartreuse", "indigo", "coral", "slate", "amber",
-    "fuchsia", "olive", "cerulean", "maroon", "mint", "lavender", "rust",
+    "crimson",
+    "teal",
+    "ochre",
+    "violet",
+    "chartreuse",
+    "indigo",
+    "coral",
+    "slate",
+    "amber",
+    "fuchsia",
+    "olive",
+    "cerulean",
+    "maroon",
+    "mint",
+    "lavender",
+    "rust",
 ];
 
-static STATUSES: &[&str] = &["active", "pending", "inactive", "archived", "suspended", "expired"];
+static STATUSES: &[&str] = &[
+    "active",
+    "pending",
+    "inactive",
+    "archived",
+    "suspended",
+    "expired",
+];
 
-static KINDS: &[&str] = &["standard", "premium", "basic", "trial", "enterprise", "legacy"];
+static KINDS: &[&str] = &[
+    "standard",
+    "premium",
+    "basic",
+    "trial",
+    "enterprise",
+    "legacy",
+];
 
 static DOMAINS: &[&str] = &[
-    "lumenforge.io", "vexel.dev", "quarkmail.com", "nimbus.net", "fathom.app", "stratolabs.io",
-    "embermail.org", "cobalt.systems", "driftbox.com", "pulsewire.net",
+    "lumenforge.io",
+    "vexel.dev",
+    "quarkmail.com",
+    "nimbus.net",
+    "fathom.app",
+    "stratolabs.io",
+    "embermail.org",
+    "cobalt.systems",
+    "driftbox.com",
+    "pulsewire.net",
 ];
 
 static WORDS: &[&str] = &[
-    "ambient", "brisk", "cobalt", "drift", "ember", "fathom", "glint", "hollow", "iris", "junction",
-    "keel", "lattice", "moss", "nimble", "orbit", "plume", "quill", "ripple", "sable", "tide",
-    "umber", "vesper", "wisp", "yonder", "zenith", "arc", "bloom", "cairn", "delta", "echo",
-    "fern", "grove", "haze", "inlet", "knoll", "loom", "mirth", "north", "opal", "pith",
+    "ambient", "brisk", "cobalt", "drift", "ember", "fathom", "glint", "hollow", "iris",
+    "junction", "keel", "lattice", "moss", "nimble", "orbit", "plume", "quill", "ripple", "sable",
+    "tide", "umber", "vesper", "wisp", "yonder", "zenith", "arc", "bloom", "cairn", "delta",
+    "echo", "fern", "grove", "haze", "inlet", "knoll", "loom", "mirth", "north", "opal", "pith",
 ];
 
-static CURRENCY_CODES: &[&str] = &["USD", "EUR", "JPY", "GBP", "BRL", "PLN", "AUD", "CAD", "CHF", "SEK"];
+static CURRENCY_CODES: &[&str] = &[
+    "USD", "EUR", "JPY", "GBP", "BRL", "PLN", "AUD", "CAD", "CHF", "SEK",
+];
 
-static LANGUAGE_CODES: &[&str] = &["en", "ja", "pt", "fi", "pl", "de", "es", "vi", "it", "nl", "fr", "ko"];
+static LANGUAGE_CODES: &[&str] = &[
+    "en", "ja", "pt", "fi", "pl", "de", "es", "vi", "it", "nl", "fr", "ko",
+];
 
 static MIME_TYPES: &[&str] = &[
-    "application/json", "text/html", "image/png", "image/jpeg", "application/pdf", "text/csv",
-    "audio/mpeg", "video/mp4", "application/zip", "text/plain",
+    "application/json",
+    "text/html",
+    "image/png",
+    "image/jpeg",
+    "application/pdf",
+    "text/csv",
+    "audio/mpeg",
+    "video/mp4",
+    "application/zip",
+    "text/plain",
 ];
 
 static USER_AGENTS: &[&str] = &[
@@ -118,7 +267,7 @@ fn civil_from_days(z: i64) -> (i64, u32, u32) {
 pub fn days_from_civil(y: i64, m: u32, d: u32) -> i64 {
     let y = if m <= 2 { y - 1 } else { y };
     let era = (if y >= 0 { y } else { y - 399 }) / 400;
-    let yoe = (y - era * 400) as i64; // [0, 399]
+    let yoe = y - era * 400; // [0, 399]
     let m = m as i64;
     let d = d as i64;
     let doy = (153 * (if m > 2 { m - 3 } else { m + 9 }) + 2) / 5 + d - 1; // [0, 365]
@@ -194,7 +343,11 @@ pub fn generate(st: SemanticType, rng: &mut impl Rng) -> String {
             pick(rng, FIRST_NAMES).to_lowercase(),
             rng.random_range(1..100)
         ),
-        Company => format!("{} {}", pick(rng, COMPANY_STEMS), pick(rng, COMPANY_SUFFIXES)),
+        Company => format!(
+            "{} {}",
+            pick(rng, COMPANY_STEMS),
+            pick(rng, COMPANY_SUFFIXES)
+        ),
         City => pick(rng, CITIES).to_string(),
         Country => pick(rng, COUNTRIES).to_string(),
         CountryCode => pick(rng, COUNTRY_CODES).to_string(),
@@ -257,7 +410,9 @@ pub fn generate(st: SemanticType, rng: &mut impl Rng) -> String {
         FileSize => rng.random_range(128..10_000_000_000i64).to_string(),
         ShortCode => {
             const CS: &[u8] = b"ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-            (0..8).map(|_| CS[rng.random_range(0..CS.len())] as char).collect()
+            (0..8)
+                .map(|_| CS[rng.random_range(0..CS.len())] as char)
+                .collect()
         }
         Version => format!(
             "{}.{}.{}",

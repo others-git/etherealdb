@@ -15,7 +15,11 @@ async fn start_with(cfg: Config) -> u16 {
 }
 
 async fn start_server(seed: Option<u64>) -> u16 {
-    start_with(Config { seed, ..Config::default() }).await
+    start_with(Config {
+        seed,
+        ..Config::default()
+    })
+    .await
 }
 
 async fn connect(port: u16) -> tokio_postgres::Client {
@@ -60,7 +64,10 @@ async fn select_returns_plausible_rows() {
         assert!(id.parse::<i64>().is_ok(), "id not an int: {id}");
         assert!(email.contains('@'), "email not an email: {email}");
         assert!(active == "t" || active == "f", "bad bool: {active}");
-        assert!(created.len() == 19 && &created[4..5] == "-", "bad timestamp: {created}");
+        assert!(
+            created.len() == 19 && &created[4..5] == "-",
+            "bad timestamp: {created}"
+        );
     }
 }
 
@@ -69,7 +76,10 @@ async fn count_star_returns_one_row() {
     let port = start_server(None).await;
     let client = connect(port).await;
 
-    let msgs = client.simple_query("select count(*) from orders").await.unwrap();
+    let msgs = client
+        .simple_query("select count(*) from orders")
+        .await
+        .unwrap();
     let rows = rows(&msgs);
     assert_eq!(rows.len(), 1);
     assert!(rows[0].get(0).unwrap().parse::<i64>().is_ok());
@@ -84,10 +94,16 @@ async fn dml_and_commands_are_acked() {
         .simple_query("insert into ghosts (name) values ('casper')")
         .await
         .unwrap();
-    assert!(msgs.iter().any(|m| matches!(m, SimpleQueryMessage::CommandComplete(_))));
+    assert!(
+        msgs.iter()
+            .any(|m| matches!(m, SimpleQueryMessage::CommandComplete(_)))
+    );
 
     client.simple_query("begin").await.unwrap();
-    client.simple_query("create table phantom (id int)").await.unwrap();
+    client
+        .simple_query("create table phantom (id int)")
+        .await
+        .unwrap();
     client.simple_query("commit").await.unwrap();
 }
 
@@ -100,10 +116,14 @@ async fn same_seed_same_garbage() {
     let a = client.simple_query(q).await.unwrap();
     let b = client.simple_query(q).await.unwrap();
 
-    let a: Vec<String> =
-        rows(&a).iter().map(|r| format!("{}|{}", r.get(0).unwrap(), r.get(1).unwrap())).collect();
-    let b: Vec<String> =
-        rows(&b).iter().map(|r| format!("{}|{}", r.get(0).unwrap(), r.get(1).unwrap())).collect();
+    let a: Vec<String> = rows(&a)
+        .iter()
+        .map(|r| format!("{}|{}", r.get(0).unwrap(), r.get(1).unwrap()))
+        .collect();
+    let b: Vec<String> = rows(&b)
+        .iter()
+        .map(|r| format!("{}|{}", r.get(0).unwrap(), r.get(1).unwrap()))
+        .collect();
     assert_eq!(a, b, "deterministic mode should repeat itself");
 }
 
@@ -121,7 +141,11 @@ async fn select_one_echoes_literal() {
 fn crush_config(max_rows: u64) -> Config {
     Config {
         seed: Some(99),
-        crush: CrushConfig { enabled: true, max_rows, ..CrushConfig::default() },
+        crush: CrushConfig {
+            enabled: true,
+            max_rows,
+            ..CrushConfig::default()
+        },
         ..Config::default()
     }
 }
@@ -138,7 +162,10 @@ async fn unsafe_query_is_crushed() {
 
     // Wide synthesised schema: still type-correct under the avalanche.
     let r = &rows[0];
-    assert!(r.get(0).unwrap().parse::<i64>().is_ok(), "id should be an int");
+    assert!(
+        r.get(0).unwrap().parse::<i64>().is_ok(),
+        "id should be an int"
+    );
     let email_col = (0..r.len()).find(|&i| msgs_col_name(&msgs, i) == Some("email"));
     if let Some(i) = email_col {
         assert!(r.get(i).unwrap().contains('@'));
@@ -164,10 +191,17 @@ async fn safe_query_is_spared_under_crush() {
         .await
         .unwrap();
     let safe = rows(&msgs);
-    assert!(safe.len() <= 8, "safe query must not be crushed, got {}", safe.len());
+    assert!(
+        safe.len() <= 8,
+        "safe query must not be crushed, got {}",
+        safe.len()
+    );
 
     // count(*) is always safe even though it has no WHERE/LIMIT/columns.
-    let msgs = client.simple_query("select count(*) from users").await.unwrap();
+    let msgs = client
+        .simple_query("select count(*) from users")
+        .await
+        .unwrap();
     assert_eq!(rows(&msgs).len(), 1);
 }
 
@@ -225,7 +259,10 @@ async fn extended_handles_int_and_uuid_and_date() {
     let client = connect(port).await;
 
     let rows = client
-        .query("select user_id, account_uuid, signup_date from members limit 4", &[])
+        .query(
+            "select user_id, account_uuid, signup_date from members limit 4",
+            &[],
+        )
         .await
         .unwrap();
     assert!(!rows.is_empty());
@@ -285,7 +322,10 @@ async fn introspection_functions_answer_believably() {
     let v: &str = row.get(0);
     assert!(v.starts_with("PostgreSQL"), "version() = {v}");
 
-    let row = client.query_one("select current_database()", &[]).await.unwrap();
+    let row = client
+        .query_one("select current_database()", &[])
+        .await
+        .unwrap();
     let db: &str = row.get(0);
     assert_eq!(db, "ethereal");
 
@@ -300,8 +340,15 @@ async fn catalog_queries_return_empty() {
     let client = connect(port).await;
 
     // GUI introspection should see an empty database, not garbage rows.
-    let rows = client.query("select typname from pg_catalog.pg_type", &[]).await.unwrap();
-    assert!(rows.is_empty(), "pg_type should be empty, got {}", rows.len());
+    let rows = client
+        .query("select typname from pg_catalog.pg_type", &[])
+        .await
+        .unwrap();
+    assert!(
+        rows.is_empty(),
+        "pg_type should be empty, got {}",
+        rows.len()
+    );
 
     let rows = client
         .query("select table_name from information_schema.tables", &[])
@@ -326,6 +373,9 @@ async fn catalog_query_is_not_crushed() {
     let port = start_with(cfg).await;
     let client = connect(port).await;
 
-    let rows = client.query("select * from pg_catalog.pg_class", &[]).await.unwrap();
+    let rows = client
+        .query("select * from pg_catalog.pg_class", &[])
+        .await
+        .unwrap();
     assert!(rows.is_empty(), "catalog query must be empty, not crushed");
 }

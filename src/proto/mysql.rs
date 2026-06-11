@@ -66,8 +66,18 @@ mod coltype {
 const CRUSH_CHUNK: u64 = 1000;
 
 static WIDE_CRUSH_COLUMNS: &[&str] = &[
-    "id", "uuid", "name", "email", "phone", "status", "created_at", "updated_at", "price",
-    "is_active", "description", "metadata",
+    "id",
+    "uuid",
+    "name",
+    "email",
+    "phone",
+    "status",
+    "created_at",
+    "updated_at",
+    "price",
+    "is_active",
+    "description",
+    "metadata",
 ];
 
 fn mysql_type(wt: WireType) -> u8 {
@@ -305,13 +315,20 @@ fn parse_handshake_response(p: &[u8]) -> (String, String) {
     if client_flags & CLIENT_CONNECT_WITH_DB != 0 {
         database = read_cstr(p, &mut i);
     }
-    let user = if user.is_empty() { "ghost".into() } else { user };
+    let user = if user.is_empty() {
+        "ghost".into()
+    } else {
+        user
+    };
     (user, database)
 }
 
 fn read_cstr(p: &[u8], i: &mut usize) -> String {
     let start = (*i).min(p.len());
-    let end = p[start..].iter().position(|&c| c == 0).map_or(p.len(), |n| start + n);
+    let end = p[start..]
+        .iter()
+        .position(|&c| c == 0)
+        .map_or(p.len(), |n| start + n);
     let s = String::from_utf8_lossy(&p[start..end]).into_owned();
     *i = (end + 1).min(p.len() + 1);
     s
@@ -333,7 +350,10 @@ async fn run_query(
     let cfg = &shared.cfg;
     // MySQL clients send several statements in one COM_QUERY only with
     // CLIENT_MULTI_STATEMENTS (which we don't advertise); take the first.
-    let stmt = shape::split_statements(sql).into_iter().next().unwrap_or("");
+    let stmt = shape::split_statements(sql)
+        .into_iter()
+        .next()
+        .unwrap_or("");
     let shape = shape::extract(stmt);
 
     match &shape.kind {
@@ -342,7 +362,8 @@ async fn run_query(
         StmtKind::Insert => conn.write_packet(&ok_packet(1, rand_id(cfg, stmt))).await,
         StmtKind::Update | StmtKind::Delete => {
             let mut rng = seed_rng(cfg, stmt);
-            conn.write_packet(&ok_packet(rng.random_range(0..50), 0)).await
+            conn.write_packet(&ok_packet(rng.random_range(0..50), 0))
+                .await
         }
         // BEGIN/COMMIT/SET/CREATE/... — MySQL just wants an OK.
         StmtKind::Command(_) => conn.write_packet(&ok_packet(0, 0)).await,
@@ -372,7 +393,10 @@ async fn select_response(
     if matches!(class, CrushClass::Crush { .. }) && !cfg.crush.warn_only {
         if let Ok(_permit) = shared.crush_slots.try_acquire() {
             let cols: Vec<Resolved> = if shape.select_star {
-                WIDE_CRUSH_COLUMNS.iter().map(|n| Resolved::from_name(n)).collect()
+                WIDE_CRUSH_COLUMNS
+                    .iter()
+                    .map(|n| Resolved::from_name(n))
+                    .collect()
             } else {
                 shape.columns.iter().map(Resolved::from_spec).collect()
             };
